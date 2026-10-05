@@ -1,0 +1,41 @@
+{
+  "base_dir": "~/chatgpt-pool",
+  "test_base_dir": "~/chatgpt-pool-test",
+  "prod_server_port": 18787,
+  "test_server_port": 18887,
+  "prod_mihomo_port": 7890,
+  "prod_engine_port_range": [18000, 18699],
+  "test_port_range": [19000, 19999],
+  "refresh_interval": 7200,
+  "country_source_url": "https://platform.openai.com/docs/supported-countries",
+  "min_online_country_codes": 20,
+  "geoip_url": "https://ip-api.com/json/",
+  "home_endpoint": "https://chat.openai.com/",
+  "auth_endpoint": "https://chat.openai.com/api/auth/csrf",
+  "backend_endpoint": "https://chat.openai.com/backend-api/me",
+  "connect_timeout": 10,
+  "read_timeout": 15,
+  "total_timeout": 25,
+  "max_redirects": 3,
+  "stability_attempts": 3,
+  "stability_min_pass": 2,
+  "stability_interval": 30,
+  "concurrency": 5,
+  "max_nodes_per_round": 300,
+  "node_source_urls": [
+    "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
+    "https://raw.githubusercontent.com/freefq/free/master/v2",
+    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+  ],
+  "mihomo_bin": "mihomo",
+  "user_agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+  "builtin_countries": [
+    "US", "JP", "GB", "CA", "AU", "DE", "FR", "IT", "ES", "NL",
+    "SE", "NO", "DK", "FI", "PL", "IE", "AT", "BE", "CH", "PT",
+    "KR", "SG", "IN", "BR", "MX", "AR", "CL", "CO", "PE", "NZ",
+    "IL", "AE", "ZA", "ID", "MY", "TH", "PH", "VN", "TR", "SA",
+    "EG", "MA", "NG", "KE", "GH", "CZ", "HU", "RO", "BG", "GR",
+    "HR", "SK", "SI", "LT", "LV", "EE", "CY", "MT", "LU", "IS"
+  ]
+}

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# 测试运行产物（测试隔离目录）
+chatgpt-pool-test/base/
+chatgpt-pool-test/smoke/
+
+# 生产运行产物（§24：raw/normalized/results/final 是运行时数据，不入库）
+chatgpt-pool/raw/
+chatgpt-pool/normalized/
+chatgpt-pool/results/
+chatgpt-pool/final/
+chatgpt-pool/state/
+chatgpt-pool/logs/
+chatgpt-pool/run/
+
+# 机器本地生成配置与缓存（模板 config.example.json 保留）
+chatgpt-pool/config.json
+chatgpt-pool/supported_countries.json
+
+# 工具临时目录
+.tmp-tool-results/
