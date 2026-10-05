@@ -79,26 +79,63 @@ def emit_subscription(nodes):
     return "\n".join(out) + "\n"
 
 
-def emit_mihomo_config(nodes, mixed_port, mode="global"):
-    """生成 Mihomo 配置（P1-08：Mihomo 负责节点代理/切换/出口）。"""
+def emit_mihomo_config(nodes, mixed_port, api_port=None, mode="rule",
+                       group_url="https://www.gstatic.com/generate_204",
+                       log_level="info"):
+    """生成 Mihomo 配置（P1-08：Mihomo 负责节点代理/切换/代理连接/出口 IP）。
+
+    - 生产常驻（api_port 非空）：完整配置——external-controller 供热重载/健康检查，
+      多节点时加 url-test 自动切换组 PROXY，rules 全量走 PROXY（订阅场景全代理）。
+    - 单节点检测（api_port=None）：最小配置，GLOBAL select 单节点，不启用 url-test，
+      与逐节点检测引擎行为一致。
+    """
+    names = [str(n.get("name") or n.get("server")) for n in nodes]
+    if len(names) >= 2:
+        groups = [
+            "proxy-groups:",
+            "  - name: PROXY",
+            "    type: url-test",
+            f'    url: "{group_url}"',
+            "    interval: 300",
+            "    tolerance: 50",
+            "    proxies:",
+        ]
+        for nm in names:
+            groups.append(f'      - "{nm}"')
+        groups += [
+            "  - name: GLOBAL",
+            "    type: select",
+            "    proxies:",
+            "      - PROXY",
+        ]
+        for nm in names:
+            groups.append(f'      - "{nm}"')
+        rules = ["rules:", "  - MATCH,PROXY"]
+    else:
+        groups = [
+            "proxy-groups:",
+            "  - name: GLOBAL",
+            "    type: select",
+            "    proxies:",
+        ]
+        for nm in names:
+            groups.append(f'      - "{nm}"')
+        rules = ["rules:", "  - MATCH,GLOBAL"]
+
     lines = [
         f"mixed-port: {int(mixed_port)}",
-        "mode: global",
-        "log-level: warning",
-        "allow-lan: false",
         'bind-address: "127.0.0.1"',
+        "allow-lan: false",
+        f"mode: {mode}",
+        f"log-level: {log_level}",
         "ipv6: false",
-        "proxies:",
     ]
+    if api_port is not None:
+        lines.append(f'external-controller: "127.0.0.1:{int(api_port)}"')
+    lines += ["proxies:"]
     for n in nodes:
         lines += _entry_lines(n)
-    lines += [
-        "proxy-groups:",
-        "  - name: GLOBAL",
-        "    type: select",
-        "    proxies: [node]",
-        "rules: []",
-    ]
+    lines += groups + rules
     return "\n".join(lines) + "\n"
 
 

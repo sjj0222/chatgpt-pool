@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Config
 import engine as engine_mod
+import mihomo_svc
 import pipeline
 import poolstore
 import server as server_mod
@@ -62,44 +63,54 @@ def cmd_serve(cfg):
     server_mod.start_server(cfg, block=True)
 
 
-def _prod_mihomo_start(cfg):
-    """以当前最终池生成生产 Mihomo 配置并启动（P1-08）。"""
-    text = poolstore.read_pool_text(cfg)
-    if not text:
-        print("no pool yet; run refresh first")
-        return
-    summary = pipeline.run_refresh(cfg)  # 保证使用最新池
-    cfg_text = yaml_lite.emit_mihomo_config(
-        [_load_latest_final_nodes(cfg)], cfg.prod_mihomo_port)
-    rundir = cfg.sub("run/prod")
-    os.makedirs(rundir, exist_ok=True)
-    with open(os.path.join(rundir, "config.yaml"), "w", encoding="utf-8") as f:
-        f.write(cfg_text)
-    print(f"production mihomo config written: {rundir}/config.yaml")
-    print(f"start with: mihomo -d {rundir}")
+def _prod_mihomo(cfg):
+    """生产常驻 Mihomo 服务句柄（run/prod 目录，§33 隔离）。"""
+    return mihomo_svc.ProductionMihomo(cfg)
 
 
-def _load_latest_final_nodes(cfg):
-    final_dir = cfg.sub("final")
-    if not os.path.isdir(final_dir):
-        return []
-    files = sorted(os.listdir(final_dir))
-    nodes = []
-    for fn in reversed(files):
-        if not fn.endswith(".json"):
-            continue
-        with open(os.path.join(final_dir, fn), "r", encoding="utf-8") as f:
-            nodes = json.load(f)
-        if nodes:
-            break
-    return nodes
+def cmd_mihomo(cfg, action):
+    """mihomo start|stop|restart|status|reload（生产常驻实例管理）。"""
+    svc = _prod_mihomo(cfg)
+    if action == "start":
+        summary = svc.start()
+    elif action == "stop":
+        summary = svc.stop()
+    elif action == "restart":
+        summary = svc.restart()
+    elif action == "status":
+        summary = svc.status()
+    elif action == "reload":
+        summary = svc.reload()
+    else:
+        print(f"unknown mihomo action: {action}")
+        return 2
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_run(cfg, with_mihomo=False):
-    if with_mihomo:
-        threading.Thread(target=_prod_mihomo_start, args=(cfg,), daemon=True).start()
     srv = server_mod.start_server(cfg)
-    threading.Thread(target=scheduler.refresh_loop, args=(cfg,), daemon=True).start()
+    if with_mihomo:
+        svc = _prod_mihomo(cfg)
+        # 启动前先确保最终池最新（可能耗时，属一次性初始化）
+        try:
+            pipeline.run_refresh(cfg)
+        except Exception:
+            log = logging.getLogger("pool.main")
+            log.exception("initial refresh failed; start with existing pool")
+        start_summary = svc.start()
+        print("mihomo:", json.dumps(start_summary, ensure_ascii=False))
+
+        def _reload_after_publish(_summary):
+            r = svc.reload()
+            print("mihomo reload:", json.dumps(r, ensure_ascii=False))
+
+        threading.Thread(
+            target=scheduler.refresh_loop,
+            args=(cfg,), kwargs={"on_published": _reload_after_publish},
+            daemon=True).start()
+    else:
+        threading.Thread(target=scheduler.refresh_loop, args=(cfg,), daemon=True).start()
     print(f"server on 127.0.0.1:{getattr(cfg, 'server_port', cfg.prod_server_port)} "
           f"(/chatgpt.yaml), refresh every {cfg.refresh_interval}s")
     try:
@@ -119,6 +130,11 @@ def cmd_check(cfg):
                 if line.startswith("  - name:") or line.startswith("- name:"))
     print(f"pool: OK ({cfg.pool_path}) entries={count}")
     print(f"subscription: http://127.0.0.1:{getattr(cfg, 'server_port', cfg.prod_server_port)}/chatgpt.yaml")
+    svc = _prod_mihomo(cfg)
+    st = svc.status()
+    print(f"mihomo: {'running' if st['running'] else 'stopped'} "
+          f"pid={st['pid']} proxy_port={st['proxy_port_open']} "
+          f"api_port={st['api_port_open']}")
     return 0
 
 
@@ -126,8 +142,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="chatgpt-pool")
     ap.add_argument("--base", help="覆盖生产目录")
     ap.add_argument("--test", action="store_true", help="测试模式（目录/端口全部隔离）")
-    ap.add_argument("cmd", choices=["init", "refresh", "serve", "run", "check"])
+    ap.add_argument("cmd", choices=["init", "refresh", "serve", "run", "check", "mihomo"])
     ap.add_argument("--mihomo", action="store_true", help="run 时同时启动生产 Mihomo")
+    ap.add_argument("mihomo_action", nargs="?",
+                    choices=["start", "stop", "restart", "status", "reload"],
+                    help="mihomo 子命令：start/stop/restart/status/reload")
     args = ap.parse_args(argv)
 
     if args.test:
@@ -144,10 +163,19 @@ def main(argv=None):
         return cmd_refresh(cfg)
     elif args.cmd == "serve":
         cmd_serve(cfg)
-    elif args.cmd == "run":
-        cmd_run(cfg, with_mihomo=args.mihomo)
+    if args.cmd == "run":
+        if args.test and args.mihomo:
+            print("test mode: refusing to start production mihomo (§32)")
+            cmd_run(cfg, with_mihomo=False)
+        else:
+            cmd_run(cfg, with_mihomo=args.mihomo)
     elif args.cmd == "check":
         return cmd_check(cfg)
+    elif args.cmd == "mihomo":
+        if not args.mihomo_action:
+            print("usage: python3 main.py mihomo start|stop|restart|status|reload")
+            return 2
+        return cmd_mihomo(cfg, args.mihomo_action)
     return 0
 
 

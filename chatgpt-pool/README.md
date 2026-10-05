@@ -12,14 +12,15 @@
 
 ```
 ~/chatgpt-pool/           生产目录（固定）
-├── main.py                CLI：init / refresh / serve / run / check
+├── main.py                CLI：init / refresh / serve / run / check / mihomo
 ├── config.py              所有实现规格（endpoint/来源/端口/超时，P1-06/P1-07）
 ├── config.example.json    可编辑配置模板（init 时生成 config.json）
 ├── models.py              状态机 / chatgpt_status / failure_reason 枚举与优先级
 ├── parser.py / dedup.py   节点解析与 node_id 去重（§23）
 ├── countries.py           国家列表三级来源（§6 / P1-06）
 ├── fetchers.py            节点源抓取（来源是配置项）
-├── engine.py              Mihomo 引擎（生产/测试隔离，P1-08 / §33）
+├── engine.py              逐节点检测 Mihomo 引擎（生产/测试隔离，P1-08 / §33）
+├── mihomo_svc.py          生产 Mihomo 常驻服务（start/stop/status/reload，PID 隔离）
 ├── probe.py               HTTP 探测（经代理/直连，异常→§16 枚举）
 ├── egress.py              真实出口 IP → ISO Alpha-2（§5）
 ├── chatgpt_check.py       HOME/AUTH/BACKEND 严格检测（§10-14 / P1-01/P1-03/P1-04）
@@ -27,8 +28,8 @@
 ├── pipeline.py            刷新编排 + 发布门（§38 / P1-13/P1-14）
 ├── poolstore.py           raw/normalized/results/final + 原子替换（§24/§27）
 ├── server.py              订阅服务（仅 127.0.0.1，P1-08）
-├── scheduler.py           定时刷新
-├── yaml_lite.py           零依赖 YAML 生成/校验
+├── scheduler.py           定时刷新（发布后可回调热重载生产 Mihomo）
+├── yaml_lite.py           零依赖 YAML 生成/校验（订阅 + Mihomo 配置）
 ├── supported_countries.json   国家列表本地缓存（自动生成）
 ├── raw/ normalized/ results/ final/ state/ logs/ run/   运行数据（§24）
 └── chatgpt.yaml           最终订阅（原子替换产生）
@@ -50,6 +51,27 @@ python3 main.py run         # 订阅服务(18787) + 定时刷新(7200s)，后台
 # （同一台手机内使用；如要局域网访问，自行改 server 绑定地址，风险自负）
 ```
 
+## 生产 Mihomo 常驻（P1-08 细化）
+
+`run --mihomo` 会以最新最终池启动常驻 Mihomo 并在每次刷新发布成功后自动热重载；
+也可以独立管理：
+
+```bash
+python3 main.py mihomo status    # 进程存活 + 7890/9090 端口探测
+python3 main.py mihomo start     # 以最新最终池启动；已在运行则幂等
+python3 main.py mihomo reload    # 写新配置 + external-controller 热重载（未运行则写盘回退）
+python3 main.py mihomo restart   # 停 → 起
+python3 main.py mihomo stop      # 只终止 PID 文件记录的进程（§33）
+```
+
+生产常驻架构（P1-08）：Mihomo 负责节点代理/切换/代理连接/出口 IP，
+配置生成在 `run/prod/config.yaml`，PID 记录在 `run/prod/mihomo.pid`，
+日志在 `logs/mihomo.log`。常驻配置包含：
+`external-controller 127.0.0.1:9090`（热重载/健康检查）、
+`PROXY`（url-test 自动切换，代理层健康检查走 gstatic generate_204，
+不属于 ChatGPT 严格检测）、`GLOBAL`（select 手动兜底）、`rules: MATCH,PROXY`。
+检测引擎（18000-18699 逐节点实例）与常驻实例完全独立：目录/端口/日志/PID 互不干扰。
+
 ## 已固定的实现规格（P1-06 / P1-07）
 
 | 项 | 默认值（config.json 可改） |
@@ -61,6 +83,7 @@ python3 main.py run         # 订阅服务(18787) + 定时刷新(7200s)，后台
 | GEOIP_URL | `https://ip-api.com/json/` |
 | 生产订阅端口 | 18787（仅交付 /chatgpt.yaml） |
 | 生产 Mihomo 代理端口 | 7890 |
+| 生产 Mihomo API 端口 | 9090（仅 127.0.0.1） |
 | 生产检测引擎端口 | 18000-18699 |
 | 测试端口 | 18887 + 19000-19999 |
 | 刷新周期 | 7200 秒 |

@@ -29,6 +29,10 @@
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
   ],
   "mihomo_bin": "mihomo",
+  "mihomo_api_port": 9090,
+  "mihomo_log_level": "info",
+  "mihomo_start_timeout": 20,
+  "mihomo_group_url": "https://www.gstatic.com/generate_204",
   "user_agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
   "builtin_countries": [
     "US", "JP", "GB", "CA", "AU", "DE", "FR", "IT", "ES", "NL",

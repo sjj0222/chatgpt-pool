@@ -55,7 +55,8 @@ class MihomoEngine:
     def start(self, node_dict, mixed_port):
         os.makedirs(self.rundir, exist_ok=True)
         os.makedirs(os.path.dirname(self.logfile), exist_ok=True)
-        cfg_text = emit_mihomo_config([node_dict], mixed_port)
+        cfg_text = emit_mihomo_config([node_dict], mixed_port,
+                                      mode="global", log_level="warning")
         cfg_path = os.path.join(self.rundir, "config.yaml")
         with open(cfg_path, "w", encoding="utf-8") as f:
             f.write(cfg_text)

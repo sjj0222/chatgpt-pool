@@ -70,6 +70,21 @@ def read_pool_text(cfg):
         return f.read()
 
 
+def read_latest_final(cfg):
+    """读取最近一轮 final 目录中的最终节点列表（无则返回 []）。"""
+    final_dir = cfg.sub("final")
+    if not os.path.isdir(final_dir):
+        return []
+    for fn in reversed(sorted(os.listdir(final_dir))):
+        if not fn.endswith(".json"):
+            continue
+        with open(os.path.join(final_dir, fn), "r", encoding="utf-8") as f:
+            nodes = json.load(f)
+        if nodes:
+            return nodes
+    return []
+
+
 def atomic_write_pool(cfg, text):
     """tmp 写入 → 校验 → os.replace；绝不先删旧池再生成（§27 / P1-05）。"""
     if not yaml_lite.validate_subscription(text):

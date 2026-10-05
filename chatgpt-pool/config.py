@@ -58,6 +58,12 @@ DEFAULTS = {
 
     # ---- Mihomo ----
     "mihomo_bin": "mihomo",
+    # 生产常驻 Mihomo 的 external-controller（仅 127.0.0.1，用于热重载/健康检查；
+    # 端口矩阵之外独立分配，避免与 18787/7890/18000-18699 冲突）
+    "mihomo_api_port": 9090,
+    "mihomo_log_level": "info",   # 生产常驻日志级别（检测引擎用独立 warn 级配置）
+    "mihomo_start_timeout": 20,   # 启动就绪等待（秒）
+    "mihomo_group_url": "https://www.gstatic.com/generate_204",  # 代理层 url-test 健康检查（非 ChatGPT 严格检测，§10 不受影响）
 
     # ---- 其他 ----
     "user_agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
@@ -123,6 +129,10 @@ class Config:
         self.max_nodes_per_round = int(data["max_nodes_per_round"])
         self.node_source_urls = list(data["node_source_urls"])
         self.mihomo_bin = data["mihomo_bin"]
+        self.mihomo_api_port = int(data["mihomo_api_port"])
+        self.mihomo_log_level = data["mihomo_log_level"]
+        self.mihomo_start_timeout = int(data["mihomo_start_timeout"])
+        self.mihomo_group_url = data["mihomo_group_url"]
         self.user_agent = data["user_agent"]
         self.builtin_countries = list(data["builtin_countries"])
 
