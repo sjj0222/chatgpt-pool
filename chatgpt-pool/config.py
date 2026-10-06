@@ -15,6 +15,8 @@ DEFAULTS = {
     "test_base_dir": "~/chatgpt-pool-test", # 测试目录
     "prod_server_port": 18787,              # 生产订阅服务端口（§25）
     "test_server_port": 18887,              # 测试订阅服务端口（§3）
+    "prod_web_port": 18888,                 # 生产 Web 管理端口（§36，仅 127.0.0.1）
+    "test_web_port": 18889,                 # 测试 Web 管理端口（§36）
     "prod_mihomo_port": 7890,               # 生产 Mihomo 本地代理端口（P1-08：与 18787 分离）
     "prod_engine_port_range": [18000, 18699],  # 生产逐节点检测引擎端口（与 18787/7890 分离）
     "test_port_range": [19000, 19999],      # 测试动态端口（§3）
@@ -108,6 +110,8 @@ class Config:
         self.test_base_dir = os.path.expanduser(data["test_base_dir"])
         self.prod_server_port = int(data["prod_server_port"])
         self.test_server_port = int(data["test_server_port"])
+        self.prod_web_port = int(data.get("prod_web_port", 18888))
+        self.test_web_port = int(data.get("test_web_port", 18889))
         self.prod_mihomo_port = int(data["prod_mihomo_port"])
         self.test_port_range = [int(x) for x in data["test_port_range"]]
         self.prod_engine_port_range = [int(x) for x in data["prod_engine_port_range"]]
@@ -144,6 +148,8 @@ class Config:
         kw.setdefault("test_base_dir", base)
         kw.setdefault("prod_server_port", 18787)  # 保持定义，但测试绝不绑定
         kw.setdefault("test_server_port", 18887)
+        kw.setdefault("prod_web_port", 18888)
+        kw.setdefault("test_web_port", 18889)
         return cls(**kw)
 
     @property

@@ -266,12 +266,25 @@ def cmd_backup(cfg):
     return 0
 
 
+def cmd_web(cfg):
+    """V0.3 Phase 9（§36/§37）：本机 Web 管理页面（仅 127.0.0.1）。"""
+    import dashboard as dash_mod
+    httpd = dash_mod.start_dashboard(cfg, port=cfg.web_port)
+    print("web dashboard: http://127.0.0.1:%d  (仅本机访问, §36)" % cfg.web_port)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        httpd.shutdown()
+        print("web stopped")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="chatgpt-pool")
     ap.add_argument("--base", help="覆盖生产目录")
     ap.add_argument("--test", action="store_true", help="测试模式（目录/端口全部隔离）")
     ap.add_argument("cmd", choices=["init", "refresh", "serve", "run", "check",
-                                    "mihomo", "scheduler", "backup"])
+                                    "mihomo", "scheduler", "backup", "web"])
     ap.add_argument("--mihomo", action="store_true", help="run 时同时启动生产 Mihomo")
     ap.add_argument("mihomo_action", nargs="?",
                     choices=["start", "stop", "restart", "status", "reload",
@@ -282,9 +295,11 @@ def main(argv=None):
     if args.test:
         cfg = Config.for_test(base=args.base)
         cfg.server_port = cfg.test_server_port
+        cfg.web_port = cfg.test_web_port
     else:
         cfg = Config(base_dir=args.base) if args.base else Config()
         cfg.server_port = cfg.prod_server_port
+        cfg.web_port = cfg.prod_web_port
     _setup_logging(cfg)
 
     if args.cmd == "init":
@@ -313,6 +328,8 @@ def main(argv=None):
         return cmd_scheduler(cfg, args.mihomo_action)
     elif args.cmd == "backup":
         return cmd_backup(cfg)
+    elif args.cmd == "web":
+        return cmd_web(cfg)
     return 0
 
 
