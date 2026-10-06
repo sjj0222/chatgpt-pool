@@ -34,13 +34,19 @@ import yaml_lite
 
 def _setup_logging(cfg):
     os.makedirs(cfg.sub("logs"), exist_ok=True)
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        level=logging.INFO, format=fmt,
         handlers=[
             logging.FileHandler(cfg.sub("logs/pool.log"), encoding="utf-8"),
             logging.StreamHandler(),
         ])
+    # P1-04：REJECTED 明细独立落 logs/reject.log
+    rj = logging.getLogger("pool.reject")
+    rj.setLevel(logging.INFO)
+    rj.propagate = False
+    rj.addHandler(logging.FileHandler(
+        cfg.sub("logs/reject.log"), encoding="utf-8"))
 
 
 def cmd_init(cfg):

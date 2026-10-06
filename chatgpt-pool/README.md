@@ -21,6 +21,7 @@
 ├── fetchers.py            节点源抓取（来源是配置项）
 ├── engine.py              逐节点检测 Mihomo 引擎（生产/测试隔离，P1-08 / §33）
 ├── mihomo_svc.py          生产 Mihomo 常驻服务（start/stop/status/reload，PID 隔离）
+├── history.py             节点历史/健康度/评分（V0.2.1 P1-01/02/03）
 ├── probe.py               HTTP 探测（经代理/直连，异常→§16 枚举）
 ├── egress.py              真实出口 IP → ISO Alpha-2（§5）
 ├── chatgpt_check.py       HOME/AUTH/BACKEND 严格检测（§10-14 / P1-01/P1-03/P1-04）
@@ -31,7 +32,11 @@
 ├── scheduler.py           定时刷新（发布后可回调热重载生产 Mihomo）
 ├── yaml_lite.py           零依赖 YAML 生成/校验（订阅 + Mihomo 配置）
 ├── supported_countries.json   国家列表本地缓存（自动生成）
-├── raw/ normalized/ results/ final/ state/ logs/ run/   运行数据（§24）
+├── raw/ normalized/ results/ state/ logs/ run/   运行数据（§24）
+├── final/current.json     当前有效最终池（成功发布原子替换，V0.2.1 P0-02）
+├── final/failed/          失败轮次诊断（绝不覆盖 current.json）
+├── state/node_history.json    节点跨轮历史（P1-02）
+├── logs/reject.log        REJECTED 明细（P1-04，与 pool.log/mihomo.log 分离）
 └── chatgpt.yaml           最终订阅（原子替换产生）
 ```
 
@@ -49,7 +54,37 @@ python3 main.py run         # 订阅服务(18787) + 定时刷新(7200s)，后台
 # 手机端代理客户端订阅地址：
 #   http://127.0.0.1:18787/chatgpt.yaml
 # （同一台手机内使用；如要局域网访问，自行改 server 绑定地址，风险自负）
+
+# V0.2.1 P0-06：Termux 真实环境六步验收（mihomo -v / init / refresh / start / status / stop）
+bash test_termux.sh
 ```
+
+## V0.2.1 Production Hardening
+
+- **P0-01 失败可解释**：`refresh` 结束输出 `reject_summary`（按本轮真实 REJECTED
+  节点的 failure_reason 计数，来源是 pipeline 检测结果，不做猜测/二次扫描）。
+- **P0-02 final 隔离**：成功发布 → `final/current.json`（原子替换）；失败轮次 →
+  `final/failed/{round_id}.json`（含 reason/reject_summary 诊断），**绝不覆盖
+  current.json**；系统级失败同样落 failed/。
+- **P0-03 启动安全**：`mihomo start` 前检查 `final/current.json` 存在且节点数 > 0
+  （否则 `NO_ACTIVE_POOL`，绝不启动空池）；配置生成成功；代理 7890 与 API 9090
+  双端口就绪才返回 started。
+- **P0-04 status 增强**：
+  ```json
+  { "running": true, "pid": 12345,
+    "active_pool": { "count": 20, "round_id": "20261006..." },
+    "ports": { "proxy": 7890, "api": 9090, "proxy_open": true, "api_open": true },
+    "mihomo_version": "v1.19.31" }
+  ```
+- **P0-05 诊断输出**：成功 `{published:true, pool_size, round_id}`；失败
+  `{published:false, reason, reject_summary}`。
+- **P1-01/02/03 生命周期与历史**：`state/node_history.json` 跨轮保留每节点
+  （attempts/success/last_success/last_failure/ip/country/history）；健康状态
+  NEW→CHECKING→GOOD/DEGRADED/BAD（最近 5 次窗口）与显式 REMOVED 标记；
+  **一次失败不删除历史**（可恢复）。评分 `score = 成功率×50 + 稳定性×30 +
+  速度×20` 仅用于排序，**不改变 V5.2 淘汰规则与准入条件**。
+- **P1-04 日志分离**：`logs/pool.log`（主流程）、`logs/mihomo.log`（常驻进程）、
+  `logs/reject.log`（REJECTED 明细）。
 
 ## 生产 Mihomo 常驻（P1-08 细化）
 

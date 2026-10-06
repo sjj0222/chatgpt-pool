@@ -13,6 +13,7 @@ rundir/端口/日志；本模块只管理 run/prod 常驻实例。
 """
 import logging
 import os
+import re
 import signal
 import subprocess
 import time
@@ -84,15 +85,37 @@ class ProductionMihomo:
         return self.config_path
 
     # ---- 状态 ----
+    def _mihomo_version(self):
+        """mihomo -v 解析版本（失败/超时 → unknown）。"""
+        try:
+            out = subprocess.check_output(
+                [self._bin(), "-v"], timeout=3,
+                stderr=subprocess.STDOUT).decode("utf-8", "replace")
+        except Exception:
+            return "unknown"
+        m = re.search(r"(v?\d+\.\d+\.\d+)", out)
+        return m.group(1) if m else "unknown"
+
     def status(self):
         pid = self._read_pid()
         alive = _proc_alive(pid)
         proxy_open = is_port_open(self.cfg.prod_mihomo_port)
         api_open = is_port_open(self.cfg.mihomo_api_port)
+        cur = poolstore.read_current_final(self.cfg)
+        active_pool = None
+        if cur is not None:
+            active_pool = {"count": len(cur["nodes"]),
+                           "round_id": cur["round_id"]}
         return {
             "running": bool(alive and proxy_open),
             "pid": pid,
             "pid_alive": bool(alive),
+            "active_pool": active_pool,
+            "ports": {"proxy": self.cfg.prod_mihomo_port,
+                      "api": self.cfg.mihomo_api_port,
+                      "proxy_open": proxy_open,
+                      "api_open": api_open},
+            "mihomo_version": self._mihomo_version(),
             "proxy_port_open": proxy_open,
             "api_port_open": api_open,
             "proxy_port": self.cfg.prod_mihomo_port,
@@ -103,19 +126,27 @@ class ProductionMihomo:
 
     # ---- 生命周期 ----
     def start(self, nodes=None):
-        """启动常驻实例；已在运行则幂等返回。返回 summary dict。"""
+        """启动常驻实例（V0.2.1 P0-03 安全检查）；已在运行则幂等。
+
+        检查 1：当前池存在（final/current.json，否则 NO_ACTIVE_POOL）。
+        检查 2：节点数量 > 0。
+        检查 3：配置生成成功（run/prod/config.yaml）。
+        检查 4：代理 7890 与 API 9090 双端口就绪后才返回 started。
+        """
         st = self.status()
         if st["running"]:
             return {"started": False, "reason": "already_running",
                     "pid": st["pid"], "config": self.config_path}
 
         if nodes is None:
-            nodes = poolstore.read_latest_final(self.cfg)
+            cur = poolstore.read_current_final(self.cfg)
+            nodes = cur["nodes"] if cur else []
         if not nodes:
-            return {"started": False, "reason": "no_final_nodes; run refresh first",
+            # 检查 1/2：无当前有效池或节点数为 0，绝不启动空池
+            return {"started": False, "reason": "NO_ACTIVE_POOL",
                     "config": self.config_path}
 
-        self.ensure_config(nodes)
+        self.ensure_config(nodes)   # 检查 3：配置生成成功
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
         logf = open(self.log_path, "a", encoding="utf-8")
         try:
@@ -134,9 +165,12 @@ class ProductionMihomo:
                 self._clear_pid()
                 return {"started": False, "reason": "mihomo exited early",
                         "exit_code": proc.returncode, "log": self.log_path}
-            if is_port_open(self.cfg.prod_mihomo_port):
-                log.info("prod mihomo started pid=%s port=%s",
-                         proc.pid, self.cfg.prod_mihomo_port)
+            # 检查 4：代理端口 + API 端口都就绪（P0-03）
+            if (is_port_open(self.cfg.prod_mihomo_port)
+                    and is_port_open(self.cfg.mihomo_api_port)):
+                log.info("prod mihomo started pid=%s ports=%s/%s",
+                         proc.pid, self.cfg.prod_mihomo_port,
+                         self.cfg.mihomo_api_port)
                 return {"started": True, "pid": proc.pid,
                         "proxy_port": self.cfg.prod_mihomo_port,
                         "api_port": self.cfg.mihomo_api_port,

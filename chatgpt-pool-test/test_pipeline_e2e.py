@@ -55,11 +55,13 @@ class TestPipelineE2E(unittest.TestCase):
         self.assertTrue(all(r["stability_pass"] for r in rows))
         self.assertTrue(all(r["stability_results"] == [True, True, True]
                             for r in rows))
-        # 最终池与 chatgpt.yaml 一致
-        final_files = sorted(os.listdir(cfg.sub("final")))
-        with open(os.path.join(cfg.sub("final"), final_files[-1])) as f:
-            final = json.load(f)
-        self.assertEqual(len(final), 2)
+        # 最终池与 chatgpt.yaml 一致（V0.2.1 P0-02：final/current.json）
+        with open(os.path.join(cfg.sub("final"), "current.json")) as f:
+            current = json.load(f)
+        self.assertEqual(len(current["nodes"]), 2)
+        self.assertTrue(current["round_id"])
+        self.assertTrue(os.path.isfile(cfg.sub("final/current.json")))
+        self.assertFalse(os.path.isdir(cfg.sub("final/failed")))  # 成功轮次不落 failed/
         # 发布门（P1-13）：published=True 且旧池文件被原子替换（本次无旧池）
         self.assertFalse(os.path.exists(cfg.tmp_pool_path))
 

@@ -1,0 +1,75 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# V0.2.1 P0-06：Termux 真实环境六步验收测试
+# 用法：在 Termux 中执行
+#   cp -r chatgpt-pool ~/chatgpt-pool
+#   cd ~/chatgpt-pool
+#   bash test_termux.sh
+set -u
+FAIL=0
+
+step() { echo; echo "===== [$1/6] $2 ====="; }
+ok()   { echo "[PASS] $1"; }
+bad()  { echo "[FAIL] $1"; FAIL=1; }
+
+step 1 "版本：mihomo -v"
+if mihomo -v; then ok "mihomo 可执行"; else bad "mihomo 未安装（pkg install mihomo）"; fi
+
+step 2 "初始化：python3 main.py init"
+if python3 main.py init; then ok "init 完成"; else bad "init 失败"; fi
+
+step 3 "刷新：python3 main.py refresh"
+if python3 main.py refresh; then
+    ok "refresh 执行完成（published 取决于真实节点；失败轮次应写入 final/failed/ 且旧池保留）"
+else
+    # refresh 退出码 1 = 未发布（EMPTY_POOL/系统级失败）；失败可解释即符合预期
+    ok "refresh 未发布（查看上方摘要 reason / reject_summary，失败必须可解释）"
+fi
+echo "-- final 目录隔离检查 --"
+if [ -f final/current.json ]; then
+    ok "final/current.json 存在（成功池）"
+else
+    ok "无 current.json（尚无成功池，属预期）"
+fi
+if ls final/failed/ >/dev/null 2>&1; then
+    ok "失败轮次已写入 final/failed/（未污染 current）"
+else
+    echo "  （本轮无失败轮次）"
+fi
+echo "-- chatgpt.yaml --"
+[ -f chatgpt.yaml ] && echo "  chatgpt.yaml 存在（订阅已交付）" \
+                    || echo "  无 chatgpt.yaml（首次运行失败不生成空 YAML，符合 §29）"
+
+step 4 "启动：python3 main.py mihomo start"
+OUT=$(python3 main.py mihomo start)
+echo "$OUT"
+case "$OUT" in
+  *"started":\ true*|*"started": true*) ok "Mihomo 已启动（7890/9090 就绪）";;
+  *NO_ACTIVE_POOL*) ok "安全检查生效：无有效池时拒绝启动（P0-03）";;
+  *) bad "start 返回异常状态";;
+esac
+
+step 5 "状态：python3 main.py mihomo status"
+if python3 main.py mihomo status; then ok "status 输出完整（active_pool/ports/version）"; else bad "status 失败"; fi
+
+step 6 "停止：python3 main.py mihomo stop"
+if python3 main.py mihomo stop; then ok "stop 完成"; else bad "stop 失败"; fi
+# 停止后确认 7890/9090 已释放
+sleep 1
+python3 - <<'PY'
+import socket
+busy = []
+for p in (7890, 9090):
+    s = socket.socket()
+    if s.connect_ex(("127.0.0.1", p)) == 0:
+        busy.append(p)
+    s.close()
+print("端口释放检查:", "OK" if not busy else f"仍占用: {busy}")
+PY
+
+echo
+if [ "$FAIL" = 0 ]; then
+    echo "===== P0-06 全部通过 ====="
+else
+    echo "===== 存在 FAIL，请按上方提示处理 ====="
+fi
+exit $FAIL

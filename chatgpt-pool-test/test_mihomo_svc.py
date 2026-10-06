@@ -55,10 +55,12 @@ class FakeResp:
 
 
 def _write_final(cfg, nodes):
+    """V0.2.1 P0-02：写入 final/current.json（{"round_id","nodes"}）。"""
     os.makedirs(cfg.sub("final"), exist_ok=True)
-    path = cfg.sub("final/20261005000000.json")
+    path = cfg.sub("final/current.json")
+    payload = {"round_id": "20261005000000", "nodes": nodes}
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(nodes, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 def _node(name, protocol="ss"):
@@ -95,6 +97,11 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         self.svc = mihomo_svc.ProductionMihomo(self.cfg)
         os.makedirs(self.svc.rundir, exist_ok=True)
         FakePopen.instances = []
+        # status() 内部会探测版本；统一 mock，避免真实 check_output 干扰
+        self._v = mock.patch("mihomo_svc.subprocess.check_output",
+                             return_value=b"v1.19.31")
+        self._v.start()
+        self.addCleanup(self._v.stop)
 
     def test_paths_inside_test_base(self):
         self.assertTrue(self.svc.pid_path.startswith(self.cfg.base_dir))
@@ -127,10 +134,11 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         self.assertEqual(summary["reason"], "already_running")
         self.assertEqual(FakePopen.instances, [])  # 未重复启动
 
-    def test_start_no_final_nodes(self):
+    def test_start_no_active_pool(self):
+        # V0.2.1 P0-03：无 final/current.json → NO_ACTIVE_POOL，绝不启动空池
         summary = self.svc.start()
         self.assertFalse(summary["started"])
-        self.assertEqual(summary["reason"], "no_final_nodes; run refresh first")
+        self.assertEqual(summary["reason"], "NO_ACTIVE_POOL")
 
     def test_start_timeout_cleans_pid(self):
         _write_final(self.cfg, [_node("a"), _node("b")])
@@ -203,6 +211,10 @@ class TestProductionMihomoReload(unittest.TestCase):
         self.svc = mihomo_svc.ProductionMihomo(self.cfg)
         os.makedirs(self.svc.rundir, exist_ok=True)
         FakePopen.instances = []
+        self._v = mock.patch("mihomo_svc.subprocess.check_output",
+                             return_value=b"v1.19.31")
+        self._v.start()
+        self.addCleanup(self._v.stop)
 
     def test_reload_when_not_running_writes_config(self):
         _write_final(self.cfg, [_node("a"), _node("b")])
@@ -245,6 +257,12 @@ class TestProductionMihomoReload(unittest.TestCase):
 
 
 class TestMihomoCli(unittest.TestCase):
+    def setUp(self):
+        self._v = mock.patch("mihomo_svc.subprocess.check_output",
+                             return_value=b"v1.19.31")
+        self._v.start()
+        self.addCleanup(self._v.stop)
+
     def test_main_mihomo_status_uses_test_base(self):
         cfg = make_cfg("mihomo_cli")
         ret = main_mod.main(["--test", "--base", cfg.base_dir, "mihomo", "status"])
