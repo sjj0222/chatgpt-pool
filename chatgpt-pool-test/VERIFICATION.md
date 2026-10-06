@@ -151,3 +151,19 @@ pipeline/空池保护/原子替换/mihomo start 与 config）。
 4. mihomo stop：kill 后 _wait_ports_released 轮询（1 秒一次、最多 5 秒）
    确认 7890/9090 释放；返回 pid_exited/ports；CLI 打印 PASS/
    PORT_RELEASE_TIMEOUT。只操作 PID 文件记录的进程（§33）。
+
+## 13. V0.3 Phase 1 数据模型扩展 验证
+
+V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）。Phase 1 纯增量：
+新增枚举/结构/存储，不改动 V0.2.2.2 任何既有枚举、格式与行为。
+
+| 项 | 结果 |
+|---|---|
+| 单元/Mock 全量 | ✅ 141/141 全绿（118 基线 + 23 新增 test_models_v03.py） |
+| 生命周期枚举 | ✅ 11 状态完整（DISCOVERED…BLACKLIST）；源 3 状态；能力 5 标签；事件 7 类 |
+| 评分结构 | ✅ 权重 40/30/20/10；compute_overall 复算一致；breakdown 可展示；service_score 多维 |
+| 指纹 | ✅ 同参稳定；凭据/地址变化区分；名称/来源变化不变（迁移识别）；参数顺序无关；无明文 |
+| 向后兼容 | ✅ Node 新字段默认 ""；旧 dict（无 node_fingerprint）可读 |
+| schema 版本 | ✅ 新文件写 SCHEMA_VERSION=3；旧文件无版本兼容读；upsert 保留未知字段（只增不改） |
+| 事件 | ✅ 追加记录、保留最近 50 条 |
+| 未改动 | ✅ failure_reason/DiagnosticStage/SubReason/Stage/ChatgptStatus/pipeline/诊断产物格式全部保持 |

@@ -248,3 +248,32 @@ python3 run_tests.py        # 全量（场景 A-J，全部 mock，不碰生产�
 A 目录分离 ✓ | B 18787 订阅 ✓ | C 18887+19xxx ✓ | D 真实出口 IP 定国家 ✓ |
 E 状态机 ✓ | F 严格通过 ✓ | G 稳定性 ≥2/3 ✓ | H 最终池准入 ✓ |
 I 旧池保护 ✓ | J 首次运行 BOOTSTRAP_FAILED ✓ | K 测试隔离 ✓
+
+## V0.3 Node Quality Optimization — Phase 1 数据模型扩展
+
+V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节点检测池"升级为
+"自治节点质量管理系统"。开发按 Phase 1-10 严格推进，每阶段交付并确认后进入
+下一阶段。本阶段（Phase 1）只做数据模型扩展，**纯增量，零修改旧逻辑**。
+
+- **SCHEMA_VERSION=3**（§26）：新数据带版本号；只增字段；旧数据（无版本）
+  读取兼容。
+- **LifecycleState（§4/§5）**：DISCOVERED→VALIDATED→PROBING→PROBATION→
+  STANDBY→ACTIVE，失败 DEGRADED→COOLDOWN→RECOVERING→ACTIVE/FAILED，
+  永久 BLACKLIST。与 Stage（单轮检测管线，§7）是两个独立维度。
+- **SourceState（§17）**：ACTIVE/DEGRADED/DISABLED。
+- **Capability（§9）**：chatgpt/github/claude/gemini/web 能力标签。
+- **NodeQualityScore（§7/§28）**：overall = 稳定性40% + 可用率30% + 延迟20%
+  + 历史信用10%；breakdown 可单独展示；窗口 5m/1h/24h/7d；时间衰减
+  24h 70% + 30d 30%（§15）。
+- **ServiceScore（§8）**：多维服务评分（禁止只有总分）。
+- **NodeEvent（§27）**：DISCOVERED/PROMOTED/DEGRADED/RECOVERED/COOLDOWN/
+  EXPIRED/DELETED。
+- **node_fingerprint（§3）**：protocol+server+port+认证hash+TLS/网络参数 →
+  sha256；稳定（同参同值）、区分（凭据/地址变化变化）、迁移识别（名称/来源
+  变化不变）；不保存明文（§35）。
+- **NodeLifecycleStore**：`state/node_lifecycle.json`（生命周期/评分/服务能力/
+  信用字段/事件，事件保留最近 50 条）。
+- **SourceLifecycleStore**：`state/source_lifecycle.json`（state/source_score/
+  alive_rate/连续低质量计数/policy 黑白名单）。
+
+测试：118 基线 + 23 新增（test_models_v03.py）= **141/141 全绿**。

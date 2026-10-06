@@ -140,6 +140,7 @@ class Node:
     stability_results: list = field(default_factory=list)
     stability_pass: bool = False
     round_id: str = ""
+    node_fingerprint: str = ""       # V0.3：跨轮唯一识别（protocol/server/port/认证/参数）
 
     def to_dict(self):
         return asdict(self)
@@ -151,3 +152,140 @@ class Node:
             if k in d:
                 kw[k] = d[k]
         return cls(**kw)
+
+
+# ============ V0.3 Node Quality Optimization：数据模型扩展 ============
+# Phase 1 纯增量：新增枚举/结构/存储，不改动 V0.2.2.2 任何既有枚举与格式。
+
+# 数据 schema 版本（V0.3 §26：只增字段，禁止破坏历史数据）。
+# 3 = V0.3 质量管理系统数据模型；历史数据无此字段视为旧版，读取兼容。
+SCHEMA_VERSION = 3
+
+
+class LifecycleState(str, Enum):
+    """节点生命周期状态（V0.3 §4/§5）。
+
+    与 Stage（单轮检测管线阶段，§7）是两个独立维度：
+    Stage 描述本轮检测走到哪一步；LifecycleState 描述节点跨轮生命周期位置。
+    """
+    DISCOVERED = "DISCOVERED"    # 来源发现：格式/协议正确，不能进入生产
+    VALIDATED = "VALIDATED"      # 基础验证：地址/端口/参数完整
+    PROBING = "PROBING"          # 质量检测中（TCP→握手→出口IP→TLS→目标服务）
+    PROBATION = "PROBATION"      # 新节点观察期，不能直接进入 ACTIVE
+    STANDBY = "STANDBY"          # 备用节点：ACTIVE 不足时补充
+    ACTIVE = "ACTIVE"            # 生产节点：满足评分阈值
+    DEGRADED = "DEGRADED"        # 质量下降：连续失败触发
+    COOLDOWN = "COOLDOWN"        # 临时暂停，等待恢复
+    RECOVERING = "RECOVERING"    # 恢复重检：成功→ACTIVE，失败→FAILED
+    FAILED = "FAILED"            # 失败（可恢复的终点态）
+    BLACKLIST = "BLACKLIST"      # 永久淘汰
+
+
+class SourceState(str, Enum):
+    """数据源生命周期（V0.3 §17）。"""
+    ACTIVE = "ACTIVE"
+    DEGRADED = "DEGRADED"
+    DISABLED = "DISABLED"
+
+
+class Capability(str, Enum):
+    """服务能力标签（V0.3 §9，用于后续路由）。"""
+    CHATGPT = "chatgpt"
+    GITHUB = "github"
+    CLAUDE = "claude"
+    GEMINI = "gemini"
+    WEB = "web"
+
+
+class NodeEventType(str, Enum):
+    """节点事件（V0.3 §27）。"""
+    DISCOVERED = "DISCOVERED"
+    VALIDATED = "VALIDATED"
+    PROMOTED = "PROMOTED"        # 晋升
+    DEGRADED = "DEGRADED"        # 降级
+    RECOVERED = "RECOVERED"      # 恢复
+    COOLDOWN = "COOLDOWN"
+    EXPIRED = "EXPIRED"          # 过期待删除
+    DELETED = "DELETED"
+
+
+# 质量评分权重（V0.3 §7：稳定性 40% + 可用率 30% + 延迟 20% + 历史信用 10%）
+SCORE_WEIGHTS = {
+    "stability": 0.40,
+    "availability": 0.30,
+    "latency": 0.20,
+    "credit": 0.10,
+}
+
+# 时间衰减（V0.3 §15：24 小时窗口权重 70%，30 天历史 30%）
+AVAILABILITY_WINDOWS = {          # 可用率统计窗口（秒）
+    "5m": 300,
+    "1h": 3600,
+    "24h": 86400,
+    "7d": 604800,
+}
+TIME_DECAY = {"recent_24h": 0.70, "history_30d": 0.30}
+
+
+@dataclass
+class NodeQualityScore:
+    """节点质量评分 0-100（V0.3 §7/§28）。
+
+    overall = stability*40% + availability*30% + latency*20% + credit*10%；
+    breakdown 必须可单独展示（§28：不能只显示总分）。
+    """
+    overall: float = 0.0
+    stability: float = 0.0        # 稳定性：成功次数/总检测次数（0-100）
+    availability: float = 0.0     # 可用率（5m/1h/24h/7d 窗口加权，0-100）
+    latency: float = 0.0          # 延迟得分（0-100，越低越好）
+    credit: float = 0.0           # 历史信用（长期稳定/恢复记录/历史表现，0-100）
+    windows: dict = field(default_factory=dict)   # availability 窗口明细
+
+    def compute_overall(self, weights=None):
+        w = weights or SCORE_WEIGHTS
+        self.overall = round(
+            self.stability * w["stability"]
+            + self.availability * w["availability"]
+            + self.latency * w["latency"]
+            + self.credit * w["credit"], 1)
+        return self.overall
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: v for k, v in d.items()
+                      if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class ServiceScore:
+    """多维服务评分（V0.3 §8）：禁止只有总分。"""
+    overall: float = 0.0          # 综合质量分（同 NodeQualityScore.overall 口径）
+    services: dict = field(default_factory=dict)  # {capability: score}
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: v for k, v in d.items()
+                      if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class NodeEvent:
+    """节点事件记录（V0.3 §27）。"""
+    ts: str = ""
+    event: str = ""               # NodeEventType
+    node_id: str = ""
+    detail: dict = field(default_factory=dict)
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: v for k, v in d.items()
+                      if k in cls.__dataclass_fields__})
