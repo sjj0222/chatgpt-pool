@@ -60,6 +60,7 @@ import parser as parser_mod
 import poolstore
 import scoring
 import source_health
+import source_mgmt
 import stability
 
 log = logging.getLogger("pool.pipeline")
@@ -470,6 +471,8 @@ def run_refresh(cfg, inject=None):
     raw_fetchers = inject.get("fetchers")
     if callable(raw_fetchers):
         raw_fetchers = raw_fetchers()
+    # V0.3 Phase 6（§21）：黑白名单/禁用源过滤（新增，不动抓取逻辑）
+    raw_fetchers = source_mgmt.filter_allowed(cfg, raw_fetchers or [])
     raw_items = fetchers.fetch_sources(cfg, raw_fetchers)
     if not raw_items:
         summary["reason"] = "INTERNAL_ERROR: all node sources failed"
@@ -548,6 +551,9 @@ def run_refresh(cfg, inject=None):
     # P0-05：源健康统计（真实 pipeline 数据；parsed=解析成功数，valid=去重后）
     summary["source_health"] = _collect_source_health(
         cfg, round_id, raw_items, parsed_nodes, nodes, new_pool)
+    # V0.3 Phase 6（§17/§20/§24）：源生命周期/评分/隔离更新（新增写盘）
+    source_mgmt.update_source_lifecycle(cfg, summary["source_health"],
+                                        round_id=round_id)
 
     # 6) 发布门（P1-13：非空 + 验证通过才原子替换；否则保留旧池）
     #    P0-02：成功 → current.json 替换；失败 → failed/{round_id}.json
