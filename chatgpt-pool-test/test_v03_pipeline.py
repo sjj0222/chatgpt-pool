@@ -81,5 +81,50 @@ class TestFingerprintInPipeline(unittest.TestCase):
         self.assertTrue(os.path.isfile(cfg.sub("run/refresh_state.json")))
 
 
+class TestScoringIntegration(unittest.TestCase):
+    """Phase 4：评分接入 pipeline——attempt 统计、评分写回、排序（准入不变）。"""
+
+    def test_success_count_and_score_written(self):
+        cfg = make_cfg("v03_score1")
+        with LocalMockSite(strict_success_routes()) as site:
+            s = pipeline.run_refresh(cfg, inject=_inject(site))
+        self.assertTrue(s["published"])
+        lc = NodeLifecycleStore(cfg.sub("state/node_lifecycle.json"))
+        for nid in s["final_nodes"]:
+            rec = lc.get(nid)
+            self.assertIsNotNone(rec)
+            self.assertGreaterEqual(rec["success_count"], 1)
+            self.assertIn("score", rec)
+            self.assertEqual(rec["score"]["overall"], rec["score"]["overall"])
+            # §28：breakdown 可单独展示
+            for k in ("stability", "availability", "latency", "credit"):
+                self.assertIn(k, rec["score"])
+            # §9：能力标签（STRICT_PASS → chatgpt ≥70）
+            self.assertIn("chatgpt", rec.get("capability", []))
+
+    def test_failed_nodes_record_fail_count(self):
+        cfg = make_cfg("v03_score2")
+        with LocalMockSite(strict_success_routes()) as site:
+            pipeline.run_refresh(cfg, inject=_inject(
+                site, probe_fn=_mixed_fail_probe(site)))
+        lc = NodeLifecycleStore(cfg.sub("state/node_lifecycle.json"))
+        recs = lc.all()
+        self.assertTrue(recs)
+        # 存在失败计数（混合失败探针 → 本轮全部失败）
+        total_fail = sum(r.get("fail_count", 0) for r in recs.values())
+        self.assertGreater(total_fail, 0)
+
+    def test_sorting_by_quality_score_no_admission_change(self):
+        """评分仅排序（P1-03）：准入条件不变，FINAL 判定不受评分影响。"""
+        cfg = make_cfg("v03_score3")
+        with LocalMockSite(strict_success_routes()) as site:
+            s = pipeline.run_refresh(cfg, inject=_inject(site))
+        # 准入仍由 stage/chatgpt_status/stability_pass 决定
+        self.assertEqual(len(s["final_nodes"]), len(
+            s.get("final_nodes", [])))
+        self.assertEqual(s["reason"], None)
+        self.assertEqual(s["pool_size"], 3)   # NODE_A/B/C 全部严格通过
+
+
 if __name__ == "__main__":
     unittest.main()

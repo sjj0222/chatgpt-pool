@@ -45,8 +45,8 @@ import logging
 import os
 import time
 
-from models import (ChatgptStatus, DiagnosticStage, FailureReason, SubReason,
-                    Stage)
+from models import (ChatgptStatus, DiagnosticStage, FailureReason,
+                    LifecycleState, Stage, SubReason)
 import chatgpt_check
 import countries
 import dedup as dedup_mod
@@ -54,9 +54,11 @@ import egress
 import engine as engine_mod
 import fetchers
 import history as history_mod
+import lifecycle as lifecycle_mod
 import lifecycle_store
 import parser as parser_mod
 import poolstore
+import scoring
 import source_health
 import stability
 
@@ -337,6 +339,102 @@ def _find_lifecycle_by_fingerprint(lc, fingerprint):
     return None
 
 
+def _extract_latency_ms(node):
+    """从检测明细提取延迟（无则 None）。"""
+    cd = node.check_detail or {}
+    if isinstance(cd, dict):
+        for key in ("elapsed_ms", "latency_ms"):
+            v = cd.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+    for r in (node.stability_results or []):
+        if isinstance(r, dict) and isinstance(r.get("elapsed_ms"), (int, float)):
+            return float(r["elapsed_ms"])
+    return None
+
+
+def _update_lifecycle_attempts(cfg, results):
+    """V0.3 Phase 4/5：检测记录同步 + 生命周期状态演进（§4/§5/§14）。
+
+    - 严格通过计 success，否则 fail；更新 recent_attempts/count。
+    - last_success/last_failure（§14 历史信用字段）。
+    - 用 LifecycleEngine 演进 life_state，记录事件（§27），恢复计数
+      recover_count（§14 恢复记录 → 信用奖励）。
+    - 纯新增写盘，不改变检测/准入。
+    """
+    now = int(time.time())
+    iso = time.strftime("%Y-%m-%dT%H:%M:%S")
+    eng = lifecycle_mod.LifecycleEngine()
+    lc = lifecycle_store.NodeLifecycleStore(
+        cfg.sub("state/node_lifecycle.json"))
+    for n in results:
+        rec = lc.get(n.node_id)
+        if rec is None:
+            continue
+        ok = (n.stage == Stage.FINAL.value
+              and n.chatgpt_status == ChatgptStatus.STRICT_PASS.value
+              and n.stability_pass)
+        scoring.record_attempt(rec, ok, _extract_latency_ms(n), ts=now)
+        prev_state = rec.get("life_state")
+        if ok:
+            rec["success_count"] = int(rec.get("success_count", 0) or 0) + 1
+            rec["last_success"] = iso
+            new_state, event, _ = eng.apply_result(rec, True)
+        else:
+            rec["fail_count"] = int(rec.get("fail_count", 0) or 0) + 1
+            rec["last_failure"] = iso
+            new_state, event, _ = eng.apply_result(rec, False)
+        # §14：恢复记录（DEGRADED/COOLDOWN/RECOVERING/FAILED → ACTIVE）
+        if new_state == LifecycleState.ACTIVE.value and prev_state in (
+                LifecycleState.DEGRADED.value, LifecycleState.COOLDOWN.value,
+                LifecycleState.RECOVERING.value, LifecycleState.FAILED.value):
+            rec["recover_count"] = int(rec.get("recover_count", 0) or 0) + 1
+        rec["life_state"] = new_state
+        if event:
+            lc.add_event(n.node_id, event, {"from": prev_state,
+                                            "to": new_state})
+        lc.upsert(n.node_id, rec)
+    lc.save()
+
+
+def _detect_environment_anomaly(results):
+    """§16：环境异常识别——大量节点同阶段失败 → 环境问题，禁止批量删除。
+
+    判定：失败节点 ≥10 且某 failure_stage 占失败节点 ≥80%。
+    仅输出诊断标记，不改变任何淘汰动作。
+    """
+    fails = [r for r in results if r.stage != Stage.FINAL.value]
+    if len(fails) < 10:
+        return None
+    stage_n = {}
+    for r in fails:
+        stage_n[r.failure_stage] = stage_n.get(r.failure_stage, 0) + 1
+    top_stage, top_n = max(stage_n.items(), key=lambda kv: kv[1])
+    if top_n >= 0.8 * len(fails):
+        return {"detected": True, "stage": top_stage,
+                "failed": len(fails), "ratio": round(top_n / len(fails), 2)}
+    return None
+
+
+def _write_scores(cfg, final_nodes):
+    """V0.3 Phase 4：为发布节点计算并写回评分（§7/§8/§9/§28）。"""
+    now = int(time.time())
+    lc = lifecycle_store.NodeLifecycleStore(
+        cfg.sub("state/node_lifecycle.json"))
+    for n in final_nodes:
+        rec = lc.get(n.node_id)
+        if rec is None:
+            continue
+        q = scoring.compute_quality_score(rec, now=now)
+        ss = scoring.compute_service_score(rec, n.chatgpt_status)
+        rec["score"] = q.to_dict()
+        rec["service_score"] = ss.to_dict()
+        rec["capability"] = scoring.capability_tags(ss)
+        scoring.record_score_history(rec, q.overall, ts=now)
+        lc.upsert(n.node_id, rec)
+    lc.save()
+
+
 def _collect_source_health(cfg, round_id, raw_items, parsed_nodes,
                            valid_nodes, final_nodes):
     """V0.2.2 P0-05：更新 run/source_health.json（V0.2.2.1 路径）。"""
@@ -412,6 +510,13 @@ def run_refresh(cfg, inject=None):
     # 4) 逐节点状态机（§38）
     results = _process_all(cfg, nodes, ctx, round_id, history)
     poolstore.write_results(cfg, round_id, results)
+    # V0.3 Phase 4/5：检测记录同步（评分数据基础 + 生命周期演进）
+    _update_lifecycle_attempts(cfg, results)
+    # V0.3 Phase 5（§16）：环境异常识别（仅诊断，不改变淘汰）
+    anomaly = _detect_environment_anomaly(results)
+    if anomaly:
+        log.warning("environment anomaly detected: %s", anomaly)
+        summary["environment_anomaly"] = anomaly
     summary["reject_summary"] = _build_reject_summary(results)
     summary["reject_summary_detailed"] = _build_reject_summary_detailed(results)
     summary["reject_summary_by_protocol"] = _build_reject_summary_by_protocol(results)
@@ -427,7 +532,15 @@ def run_refresh(cfg, inject=None):
                 if n.stage == Stage.FINAL.value
                 and n.chatgpt_status == ChatgptStatus.STRICT_PASS.value
                 and n.stability_pass]
-    new_pool.sort(key=lambda n: history.score(n.node_id), reverse=True)
+    # V0.3 Phase 4：排序键由 quality_score 提供（准入不变，仅排序）
+    lc = lifecycle_store.NodeLifecycleStore(
+        cfg.sub("state/node_lifecycle.json"))
+
+    def _sort_key(n):
+        rec = lc.get(n.node_id) or {}
+        return scoring.quality_score_of_rec(rec)
+
+    new_pool.sort(key=_sort_key, reverse=True)
     summary["new_pool_count"] = len(new_pool)
     summary["pool_size"] = len(new_pool)
     summary["final_nodes"] = [n.node_id for n in new_pool]
@@ -453,6 +566,8 @@ def run_refresh(cfg, inject=None):
         summary["reason"] = "EMPTY_POOL"
         poolstore.write_failed_round(cfg, round_id, summary)
     summary["published"] = published
+    if published:
+        _write_scores(cfg, new_pool)   # V0.3 Phase 4：评分写回 lifecycle
 
     return _finish(cfg, round_id, summary, history)
 
