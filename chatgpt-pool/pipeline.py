@@ -54,6 +54,7 @@ import egress
 import engine as engine_mod
 import fetchers
 import history as history_mod
+import lifecycle_store
 import parser as parser_mod
 import poolstore
 import source_health
@@ -295,6 +296,47 @@ def _build_reject_summary_by_protocol(results):
     return by_proto
 
 
+def _sync_lifecycle(cfg, nodes):
+    """V0.3 Phase 3：节点指纹 + 生命周期记录同步。
+
+    - 给每个节点填 node_fingerprint（§3：protocol/server/port/认证/参数）。
+    - 将节点登记到 state/node_lifecycle.json；同 fingerprint 但 node_id 变化
+      （节点迁移识别）时继承历史记录（§3：同 fingerprint 保留历史信用）。
+    - 纯新增写盘：不改变 V0.2.2.2 检测流程、准入、淘汰与诊断产物。
+    """
+    import fingerprint as fp_mod
+    lc = lifecycle_store.NodeLifecycleStore(
+        cfg.sub("state/node_lifecycle.json"))
+    for n in nodes:
+        n.node_fingerprint = fp_mod.fingerprint_for_node(n)
+        if lc.get(n.node_id) is None:
+            inherited = _find_lifecycle_by_fingerprint(lc, n.node_fingerprint)
+            if inherited:
+                rec = dict(inherited)          # 历史继承（迁移识别）
+                rec["node_id"] = n.node_id
+            else:
+                rec = lifecycle_store.default_node_lifecycle(
+                    fingerprint=n.node_fingerprint, source=n.source,
+                    protocol=n.protocol)
+            rec["fingerprint"] = n.node_fingerprint
+            rec["source"] = n.source
+            rec["protocol"] = n.protocol
+            lc.upsert(n.node_id, rec)
+        else:
+            lc.upsert(n.node_id, {"fingerprint": n.node_fingerprint,
+                                  "source": n.source,
+                                  "protocol": n.protocol})
+    lc.save()
+
+
+def _find_lifecycle_by_fingerprint(lc, fingerprint):
+    """按 fingerprint 查找已有生命周期记录（无则返回 None）。"""
+    for rec in lc.all().values():
+        if rec.get("fingerprint") == fingerprint:
+            return rec
+    return None
+
+
 def _collect_source_health(cfg, round_id, raw_items, parsed_nodes,
                            valid_nodes, final_nodes):
     """V0.2.2 P0-05：更新 run/source_health.json（V0.2.2.1 路径）。"""
@@ -342,6 +384,10 @@ def run_refresh(cfg, inject=None):
     nodes = nodes[: cfg.max_nodes_per_round]
     summary.update(total=len(nodes), invalid=invalid, dupes=dupes)
     poolstore.write_normalized(cfg, round_id, nodes)
+
+    # V0.3 Phase 3：节点指纹 + 生命周期记录同步（跨轮识别/历史继承；
+    # 纯新增写盘，不改变检测与准入流程）
+    _sync_lifecycle(cfg, nodes)
 
     # 3) 国家列表（系统级，§6 / P1-12）
     resolver = inject.get("country_resolver") or countries.resolve_country_list
