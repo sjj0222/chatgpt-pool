@@ -186,6 +186,7 @@ def cmd_check(cfg):
 def cmd_scheduler(cfg, action):
     """V0.3 Phase 7：scheduler status|tick|probe|score|cleanup|recover。"""
     import json as _json
+    import isolation as isolation_mod
     import probe_services
     import scoring as scoring_mod
     import scheduler as sched_mod
@@ -228,6 +229,8 @@ def cmd_scheduler(cfg, action):
         return 0
     if action == "cleanup":
         res = sched_mod.enforce_size_limit(cfg)
+        expired = isolation_mod.cleanup_expired(cfg)   # §13：30 天过期节点
+        res["expired_removed"] = expired
         print(_json.dumps(res, ensure_ascii=False))
         return 0
     if action == "tick":

@@ -54,6 +54,7 @@ import egress
 import engine as engine_mod
 import fetchers
 import history as history_mod
+import isolation
 import lifecycle as lifecycle_mod
 import lifecycle_store
 import parser as parser_mod
@@ -305,6 +306,7 @@ def _sync_lifecycle(cfg, nodes):
     - 给每个节点填 node_fingerprint（§3：protocol/server/port/认证/参数）。
     - 将节点登记到 state/node_lifecycle.json；同 fingerprint 但 node_id 变化
       （节点迁移识别）时继承历史记录（§3：同 fingerprint 保留历史信用）。
+    - V0.3 Phase 8（§25）：写入 node_group（IP 段/来源关联分析）。
     - 纯新增写盘：不改变 V0.2.2.2 检测流程、准入、淘汰与诊断产物。
     """
     import fingerprint as fp_mod
@@ -312,6 +314,7 @@ def _sync_lifecycle(cfg, nodes):
         cfg.sub("state/node_lifecycle.json"))
     for n in nodes:
         n.node_fingerprint = fp_mod.fingerprint_for_node(n)
+        group = isolation.node_group(n.to_dict())
         if lc.get(n.node_id) is None:
             inherited = _find_lifecycle_by_fingerprint(lc, n.node_fingerprint)
             if inherited:
@@ -324,11 +327,13 @@ def _sync_lifecycle(cfg, nodes):
             rec["fingerprint"] = n.node_fingerprint
             rec["source"] = n.source
             rec["protocol"] = n.protocol
+            rec["node_group"] = group
             lc.upsert(n.node_id, rec)
         else:
             lc.upsert(n.node_id, {"fingerprint": n.node_fingerprint,
                                   "source": n.source,
-                                  "protocol": n.protocol})
+                                  "protocol": n.protocol,
+                                  "node_group": group})
     lc.save()
 
 
@@ -557,13 +562,17 @@ def run_refresh(cfg, inject=None):
 
     # 6) 发布门（P1-13：非空 + 验证通过才原子替换；否则保留旧池）
     #    P0-02：成功 → current.json 替换；失败 → failed/{round_id}.json
+    #    V0.3 Phase 8（§16）：环境异常 → 拒绝发布，保留旧池（检测不可信）
     published = False
-    if new_pool:
+    if isolation.apply_anomaly_guard(cfg, summary):
+        poolstore.write_failed_round(cfg, round_id, summary)
+    elif new_pool:
         try:
             poolstore.emit_and_publish(cfg, new_pool)
             poolstore.write_current_final(cfg, round_id, new_pool)
             published = True
             summary["reason"] = None
+            isolation.snapshot_pool(cfg, round_id)   # V0.3 Phase 8（§30）
         except Exception as e:
             log.exception("publish failed; old pool preserved")
             summary["reason"] = f"VALIDATION_FAIL: {e}"
