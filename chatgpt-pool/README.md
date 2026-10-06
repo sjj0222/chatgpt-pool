@@ -331,3 +331,29 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
   active_nodes / success_rate / score_average / source_health / error_count /
   last_refresh / last_failure_reason），由 health_check 周期写入。
 - 新增 CLI：`python3 main.py scheduler health_check|backup`。
+
+## V0.4 Platform（平台化，只加管理层）
+
+基于 V0.3.1（7fcef6f）。四层架构，不动检测链/状态机/评分/淘汰：
+
+- **0.4-1 Architecture**：Core Engine（pipeline/scoring/lifecycle/…）→
+  Service Layer（services.py：status/nodes/sources/events + refresh/start/
+  stop + export/import + sync 设计）→ API Layer（api.py：JSON 路由）→
+  UI Layer（dashboard.py 纯页面渲染）。核心代码不依赖 UI/Service/API。
+- **0.4-2 Web Dashboard**：127.0.0.1:18888（生产）/18889（测试）。页面：
+  Dashboard（池状态/节点数/成功率/最近刷新）、Nodes（node_id/状态/score/
+  source/protocol）、Sources（source/score/alive_rate/status）、Events
+  （成功/失败/状态变化）、Diagnostic、Mobile（/m 控制页）。
+- **0.4-3 API**：GET /api/status|nodes|sources|events；
+  POST /api/refresh|start|stop（refresh 锁防并发）；附加
+  /api/export_config /api/import_config；V0.3 旧路径
+  /api/health|node|source|history|diagnostic 保持兼容。
+- **0.4-4 Android APK**：apk/ WebView 壳工程——仅 Web 控制入口
+  （加载 /m 页，经 API 操作），禁止直接操作底层。沙箱无 SDK，由用户
+  本地 Android Studio 构建（apk/README.md）。
+- **0.4-5 云同步设计**：services.sync_payload 接口设计，默认关闭；
+  白名单（匿名统计/score/source 信用/version）；禁止节点密码/隐私/
+  完整配置（有测试断言）。
+- **0.4-6 数据安全**：Local First；export/import config（白名单字段、
+  config_import.json 落盘）；自动备份（scheduler backup 12h）；
+  快照回滚（V0.3 Phase 8）可恢复。

@@ -150,6 +150,37 @@ if python3 main.py scheduler backup >/dev/null 2>&1; then
 else
     bad "scheduler backup 失败"
 fi
+echo "-- V0.4 API（0.4-3）--"
+if curl -s http://127.0.0.1:18888/api/status | grep -q '"pool"'; then
+    ok "GET /api/status 正常"
+else
+    bad "GET /api/status 异常"
+fi
+if curl -s http://127.0.0.1:18888/api/nodes | grep -q '"nodes"'; then
+    ok "GET /api/nodes 正常"
+else
+    bad "GET /api/nodes 异常"
+fi
+if curl -s http://127.0.0.1:18888/api/sources | grep -q '"sources"'; then
+    ok "GET /api/sources 正常"
+else
+    bad "GET /api/sources 异常"
+fi
+if curl -s http://127.0.0.1:18888/api/events | grep -q '"events"'; then
+    ok "GET /api/events 正常"
+else
+    bad "GET /api/events 异常"
+fi
+if curl -s http://127.0.0.1:18888/events | grep -q "chatgpt-pool"; then
+    ok "Events 页面正常"
+else
+    bad "Events 页面异常"
+fi
+if curl -s http://127.0.0.1:18888/m | grep -q "chatgpt-pool 控制台"; then
+    ok "Mobile 控制页（APK 入口 /m）正常"
+else
+    bad "Mobile 控制页异常"
+fi
 if python3 main.py backup >/dev/null 2>&1; then
     ok "backup 可执行（§34）"
 else

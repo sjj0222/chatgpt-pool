@@ -187,3 +187,21 @@ V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）
 | 压力测试 | ✅ 10000 节点 parse+dedup+fingerprint 通过 |
 | 脚本 | ✅ bash -n test_termux.sh 通过（七步含 V0.3 验收） |
 | 待真机 | Termux 执行 bash test_termux.sh（web/scheduler/backup step）+ 7 天连续运行验收 |
+
+## 15. V0.3.1 + V0.4 验证
+
+| 项 | 结果 |
+|---|---|
+| 单元/Mock 全量 | ✅ 299/299 全绿（V0.3.1 +9 → 257；V0.4 platform +28 → 285；V0.4 integration +14 → 299） |
+| V0.3.1-2 Scheduler | ✅ health_check(10min)/backup(12h) 任务；tick 锁防 refresh 并发；崩溃→重启→recover |
+| V0.3.1-3 资源控制 | ✅ memory/disk/log/data 监控；RotatingFileHandler + 手动轮转双路径（50MB 上限） |
+| V0.3.1-4 7天观察 | ✅ run/runtime_report.json（uptime/pool_size/active_nodes/score_average/source_health/error_count） |
+| 0.4-1 分层 | ✅ Core 不依赖 UI/Service/API（源码断言）；API 仅依赖 services |
+| 0.4-2 Web | ✅ 6 页面 HTTP 冒烟（含 Events/Mobile）；V0.3 旧 URL 兼容 |
+| 0.4-3 API | ✅ GET 4 + POST 3 + export/import；refresh 锁防并发（REFRESH_LOCKED） |
+| 0.4-4 APK | ✅ WebView 壳工程（仅 INTERNET 权限；127.0.0.1 明文白名单）；真机构建待用户 |
+| 0.4-5 云同步 | ✅ sync_payload 白名单无敏感字段（测试断言） |
+| 0.4-6 数据安全 | ✅ export/import round-trip；未知键拒绝；config_import.json 落盘 |
+| 集成 5 类故障 | ✅ 全池死亡/源失效/Scheduler 崩溃/数据损坏/重启恢复 |
+| 脚本 | ✅ bash -n test_termux.sh（step 7 含 V0.4 API 验收） |
+| 待真机 | Termux：bash test_termux.sh + 7 天连续运行（V0.3.1 验收）；APK 本地构建（V0.4 验收） |
