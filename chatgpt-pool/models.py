@@ -66,6 +66,45 @@ FAILURE_PRIORITY = [
 ]
 
 
+class DiagnosticStage(str, Enum):
+    """失败发生阶段（V0.2.2 P0-01：回答"哪一步失败"）。
+
+    与 §7 状态机（Stage）是两个维度：Stage 描述节点走到哪一步，
+    DiagnosticStage 描述失败发生在哪个检测阶段。
+    """
+    PARSE = "PARSE"          # 解析/规范化失败
+    PROXY = "PROXY"          # 代理引擎启动/握手阶段
+    EGRESS = "EGRESS"        # 真实出口 IP 获取
+    COUNTRY = "COUNTRY"      # 国家判定
+    TLS = "TLS"              # TLS/传输层
+    CHATGPT = "CHATGPT"      # ChatGPT 严格检测
+    STABILITY = "STABILITY"  # 稳定性复测
+    CONFIG = "CONFIG"        # 配置无效
+    UNKNOWN = "UNKNOWN"
+
+
+class SubReason(str, Enum):
+    """细分失败原因（V0.2.2 P0-01 统一枚举）。
+
+    作为 failure_detail.sub_reason 使用，回答"为什么失败"；
+    顶层 failure_reason 仍使用 §16 权威枚举（准入/优先级/统计不受影响）。
+    """
+    TCP_TIMEOUT = "TCP_TIMEOUT"
+    TCP_REFUSED = "TCP_REFUSED"
+    TCP_ERROR = "TCP_ERROR"
+    PROXY_HANDSHAKE_FAIL = "PROXY_HANDSHAKE_FAIL"
+    TLS_TIMEOUT = "TLS_TIMEOUT"
+    TLS_CERT_FAIL = "TLS_CERT_FAIL"
+    TLS_SNI_FAIL = "TLS_SNI_FAIL"
+    TLS_HANDSHAKE_FAIL = "TLS_HANDSHAKE_FAIL"
+    NO_EGRESS_IP = "NO_EGRESS_IP"
+    EGRESS_TIMEOUT = "EGRESS_TIMEOUT"
+    CHATGPT_BLOCKED = "CHATGPT_BLOCKED"
+    CHATGPT_TIMEOUT = "CHATGPT_TIMEOUT"
+    CONFIG_INVALID = "CONFIG_INVALID"
+    UNKNOWN_FAIL = "UNKNOWN_FAIL"
+
+
 def highest_priority(reasons):
     """多个问题同时出现时，按 §17 优先级取最终 failure_reason。"""
     rs = set(reasons)
@@ -93,6 +132,8 @@ class Node:
     stage: str = Stage.NEW.value
     chatgpt_status: str = ChatgptStatus.UNKNOWN.value
     failure_reason: str = ""
+    failure_stage: str = ""          # V0.2.2：失败阶段（DiagnosticStage）
+    failure_detail: dict = field(default_factory=dict)  # V0.2.2：sub_reason + 上下文
     check_detail: dict = field(default_factory=dict)
     egress_ip: str = ""
     country: str = ""

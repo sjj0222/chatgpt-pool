@@ -62,6 +62,61 @@ def write_failed_round(cfg, round_id, summary):
     return path
 
 
+def write_failed_nodes(cfg, round_id, nodes, limit=1000):
+    """失败节点明细写入 final/failed/nodes/{round_id}.jsonl（V0.2.2 P0-02）。
+
+    每行一个 JSON：node_id/protocol/server/port/source/stage/failure_reason/
+    failure_stage/failure_detail/sub_reason。
+    P1-01：每轮最多保存 1000 条，超过时保留最近（输入顺序靠后）。
+    """
+    rejected = [n for n in nodes if n.stage == "REJECTED"]
+    recent = rejected[-limit:]
+    if not recent:
+        return None
+    path = cfg.sub(f"final/failed/nodes/{round_id}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for n in recent:
+            d = n.to_dict()
+            row = {
+                "node_id": d.get("node_id", ""),
+                "protocol": d.get("protocol", ""),
+                "server": d.get("server", ""),
+                "port": d.get("port", 0),
+                "source": d.get("source", ""),
+                "stage": d.get("stage", ""),
+                "failure_reason": d.get("failure_reason", ""),
+                "failure_stage": d.get("failure_stage", ""),
+                "failure_detail": d.get("failure_detail", {}),
+                "sub_reason": (d.get("failure_detail", {}) or {}).get("sub_reason", ""),
+            }
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
+
+
+def write_refresh_state(cfg, state):
+    """写入 state/refresh_state.json（V0.2.2 P1-02，供 status 读取）。"""
+    path = cfg.sub("state/refresh_state.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+def read_refresh_state(cfg):
+    """读取最近刷新状态（无则返回 {}）。"""
+    p = cfg.sub("state/refresh_state.json")
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def write_current_final(cfg, round_id, nodes):
     """成功发布后更新 final/current.json（原子 tmp→replace，P0-02）。
 
@@ -92,6 +147,7 @@ def read_current_final(cfg):
     except (OSError, ValueError):
         return None
     return {"round_id": data.get("round_id", ""),
+            "published_at": data.get("published_at", ""),
             "nodes": data.get("nodes", [])}
 
 

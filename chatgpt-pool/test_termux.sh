@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# V0.2.1 P0-06：Termux 真实环境六步验收测试
+# V0.2.2 P0-06：Termux 真实环境六步验收测试
 # 用法：在 Termux 中执行
 #   cp -r chatgpt-pool ~/chatgpt-pool
 #   cd ~/chatgpt-pool
@@ -22,7 +22,7 @@ if python3 main.py refresh; then
     ok "refresh 执行完成（published 取决于真实节点；失败轮次应写入 final/failed/ 且旧池保留）"
 else
     # refresh 退出码 1 = 未发布（EMPTY_POOL/系统级失败）；失败可解释即符合预期
-    ok "refresh 未发布（查看上方摘要 reason / reject_summary，失败必须可解释）"
+    ok "refresh 未发布（查看上方 Detection Result：Stage/Reason 必须可解释）"
 fi
 echo "-- final 目录隔离检查 --"
 if [ -f final/current.json ]; then
@@ -32,9 +32,21 @@ else
 fi
 if ls final/failed/ >/dev/null 2>&1; then
     ok "失败轮次已写入 final/failed/（未污染 current）"
+    if ls final/failed/nodes/ >/dev/null 2>&1; then
+        ok "失败节点明细 final/failed/nodes/ 已生成（V0.2.2）"
+    else
+        echo "  （本轮无失败节点明细）"
+    fi
 else
     echo "  （本轮无失败轮次）"
 fi
+echo "-- 诊断产物检查（V0.2.2）--"
+[ -f state/source_health.json ] && ok "state/source_health.json 存在" \
+                               || bad "source_health 缺失"
+[ -f logs/detect.log ]         && ok "logs/detect.log 存在（分阶段检测）" \
+                               || bad "detect.log 缺失"
+[ -f state/refresh_state.json ] && ok "state/refresh_state.json 存在" \
+                                || bad "refresh_state 缺失"
 echo "-- chatgpt.yaml --"
 [ -f chatgpt.yaml ] && echo "  chatgpt.yaml 存在（订阅已交付）" \
                     || echo "  无 chatgpt.yaml（首次运行失败不生成空 YAML，符合 §29）"
@@ -49,7 +61,11 @@ case "$OUT" in
 esac
 
 step 5 "状态：python3 main.py mihomo status"
-if python3 main.py mihomo status; then ok "status 输出完整（active_pool/ports/version）"; else bad "status 失败"; fi
+if python3 main.py mihomo status; then
+    ok "status 输出完整（active_pool/ports/version/last_refresh/current_pool_age）"
+else
+    bad "status 失败"
+fi
 
 step 6 "停止：python3 main.py mihomo stop"
 if python3 main.py mihomo stop; then ok "stop 完成"; else bad "stop 失败"; fi

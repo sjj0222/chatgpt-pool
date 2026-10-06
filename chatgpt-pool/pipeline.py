@@ -13,6 +13,17 @@ V0.2.1 hardening：
 - P1-01/02/03：节点历史（state/node_history.json）跨轮保留，健康度
   GOOD/DEGRADED/BAD 派生，评分仅用于排序（不改准入与淘汰规则）。
 - P1-04：REJECTED 明细写 logs/reject.log。
+
+V0.2.2 Diagnostic Enhancement：
+- P0-01：失败分层——failure_stage（哪一步）+ failure_detail.sub_reason（为什么，
+  14 细分枚举）+ detail 上下文；顶层 failure_reason（§16）不变。
+- P0-02：失败节点明细 final/failed/nodes/{round_id}.jsonl（≤1000，P1-01）。
+- P0-03：logs/detect.log 分阶段检测日志（node_id STAGE START/END result reason）。
+- P0-04：reject_summary_by_protocol（判断协议整体失效）。
+- P0-05：state/source_health.json（源健康：fetch/parsed/valid/alive/alive_rate）。
+- P1-02：state/refresh_state.json（status 读取 last_refresh/last_success/
+  last_failure_reason/current_pool_age）。
+- P1-03：refresh 输出分阶段统计（stage_summary + reject_summary_detailed）。
 """
 import concurrent.futures
 import datetime
@@ -20,7 +31,8 @@ import logging
 import os
 import time
 
-from models import ChatgptStatus, FailureReason, Stage
+from models import (ChatgptStatus, DiagnosticStage, FailureReason, SubReason,
+                    Stage)
 import chatgpt_check
 import countries
 import dedup as dedup_mod
@@ -30,16 +42,36 @@ import fetchers
 import history as history_mod
 import parser as parser_mod
 import poolstore
+import source_health
 import stability
 
 log = logging.getLogger("pool.pipeline")
 reject_log = logging.getLogger("pool.reject")
+detect_log = logging.getLogger("pool.detect")
 
 
-def _reject(node, reason):
+def _diag_start(node_id, stage):
+    detect_log.info("%s %s START", node_id, stage)
+
+
+def _diag_end(node_id, stage, result, reason=""):
+    detect_log.info("%s %s END %s%s", node_id, stage, result,
+                    f" {reason}" if reason else "")
+
+
+def _reject(node, reason, stage=None, sub=None, detail=None):
+    """设置失败三要素：顶层 reason（§16）+ 阶段（哪一步）+ 细分/细节（为什么）。"""
     node.stage = Stage.REJECTED.value
     node.failure_reason = (reason.value if isinstance(reason, FailureReason)
                            else str(reason))
+    node.failure_stage = (stage.value if isinstance(stage, DiagnosticStage)
+                          else (stage or ""))
+    sub_val = (sub.value if isinstance(sub, SubReason)
+               else (sub or ""))
+    detail = dict(detail or {})
+    if sub_val:
+        detail["sub_reason"] = sub_val
+    node.failure_detail = detail or {}
 
 
 def process_node(cfg, node, ctx, round_id, history):
@@ -49,62 +81,105 @@ def process_node(cfg, node, ctx, round_id, history):
     t0 = time.monotonic()
     eng = None
     try:
+        _diag_start(node.node_id, "PROXY")
         try:
             eng = ctx["engine_factory"](node)
         except Exception as e:
             # 引擎构造失败（如二进制缺失）按节点级失败处理，不拖垮整轮
             log.warning("engine factory failed for %s: %s", node.node_id, e)
-            _reject(node, FailureReason.PROXY_START_FAIL)
+            _reject(node, FailureReason.PROXY_START_FAIL,
+                    DiagnosticStage.PROXY, SubReason.PROXY_HANDSHAKE_FAIL,
+                    {"type": "engine_factory", "error": str(e)[:200]})
+            _diag_end(node.node_id, "PROXY", "FAIL", node.failure_reason)
             return
         try:
             port = eng.start(node.to_dict(), ctx["alloc_port"]())
-        except engine_mod.ProxyStartError:
-            _reject(node, FailureReason.PROXY_START_FAIL)
+        except engine_mod.ProxyStartError as e:
+            _reject(node, FailureReason.PROXY_START_FAIL,
+                    DiagnosticStage.PROXY,
+                    getattr(e, "sub", None) or SubReason.PROXY_HANDSHAKE_FAIL,
+                    {"type": "proxy_start", "error": str(e)[:200]})
+            _diag_end(node.node_id, "PROXY", "FAIL", node.failure_reason)
             return
         except Exception:
             log.exception("engine start crashed")
-            _reject(node, FailureReason.INTERNAL_ERROR)
+            _reject(node, FailureReason.INTERNAL_ERROR,
+                    DiagnosticStage.PROXY, SubReason.UNKNOWN_FAIL,
+                    {"type": "engine_start"})
+            _diag_end(node.node_id, "PROXY", "FAIL", node.failure_reason)
             return
+        _diag_end(node.node_id, "PROXY", "OK")
         try:
             probe = ctx["probe_factory"](port)
 
-            ip, iso, reason = egress.get_egress(probe, cfg)
+            _diag_start(node.node_id, "EGRESS")
+            ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
             if reason:
-                _reject(node, reason)
+                _reject(node, reason, DiagnosticStage.EGRESS, sub, detail)
+                _diag_end(node.node_id, "EGRESS", "FAIL", node.failure_reason)
                 return
             if not iso:
-                _reject(node, FailureReason.NO_EGRESS_IP)
+                _reject(node, FailureReason.NO_EGRESS_IP,
+                        DiagnosticStage.EGRESS, SubReason.NO_EGRESS_IP,
+                        {"url": cfg.geoip_url})
+                _diag_end(node.node_id, "EGRESS", "FAIL", node.failure_reason)
                 return
             node.egress_ip = ip
             node.stage = Stage.EGRESS_OK.value
+            _diag_end(node.node_id, "EGRESS", "OK", iso)
 
             # §5：只认真实出口 IP 对应的国家。
             if iso not in ctx["countries"]:
-                _reject(node, FailureReason.UNSUPPORTED_COUNTRY)
+                _reject(node, FailureReason.UNSUPPORTED_COUNTRY,
+                        DiagnosticStage.COUNTRY, None,
+                        {"country": iso, "ip": ip})
                 return
             node.country = iso
             node.stage = Stage.COUNTRY_OK.value
 
+            _diag_start(node.node_id, "CHATGPT")
             res = chatgpt_check.run_strict_check(node, probe, cfg)
             node.chatgpt_status = res["status"]
             node.check_detail = res["detail"]
             node.stage = Stage.CHATGPT_CHECKED.value
             if not res["strict_pass"]:
-                _reject(node, res["failure_reason"] or FailureReason.STRICT_CHECK_FAIL)
+                # V0.2.2 阶段口径：传输层失败（TCP_*/TLS_*）→ TLS 阶段
+                # （用户示例 TLS_TIMEOUT→stage TLS）；业务性失败
+                # （CHATGPT_BLOCKED/CHATGPT_TIMEOUT/STRICT_CHECK_FAIL）→ CHATGPT 阶段
+                sub = res["failure_sub"]
+                subv = sub.value if isinstance(sub, SubReason) else str(sub or "")
+                if subv.startswith(("TCP_", "TLS_", "PROXY_")):
+                    chk_stage = DiagnosticStage.TLS
+                else:
+                    chk_stage = DiagnosticStage.CHATGPT
+                _reject(node,
+                        res["failure_reason"] or FailureReason.STRICT_CHECK_FAIL,
+                        chk_stage, res["failure_sub"],
+                        res["failure_detail"])
+                _diag_end(node.node_id, "CHATGPT", "FAIL", node.failure_reason)
                 return
+            _diag_end(node.node_id, "CHATGPT", "OK", res["status"])
 
+            _diag_start(node.node_id, "STABILITY")
             sres, s_pass = stability.run_stability(
                 lambda: chatgpt_check.run_strict_check(node, probe, cfg), cfg)
             node.stability_results = sres
             node.stability_pass = s_pass
             if not s_pass:
-                _reject(node, FailureReason.STABILITY_FAIL)
+                _reject(node, FailureReason.STABILITY_FAIL,
+                        DiagnosticStage.STABILITY, None,
+                        {"results": [bool(r) for r in sres],
+                         "attempts": cfg.stability_attempts})
+                _diag_end(node.node_id, "STABILITY", "FAIL", node.failure_reason)
                 return
+            _diag_end(node.node_id, "STABILITY", "OK", f"{sum(sres)}/{len(sres)}")
 
             node.stage = Stage.FINAL.value
         except Exception:
             log.exception("node processing crashed")
-            _reject(node, FailureReason.INTERNAL_ERROR)
+            _reject(node, FailureReason.INTERNAL_ERROR,
+                    DiagnosticStage.UNKNOWN, SubReason.UNKNOWN_FAIL,
+                    {"type": "processing"})
     finally:
         if eng is not None:
             try:
@@ -159,12 +234,70 @@ def _default_alloc(cfg):
 
 
 def _build_reject_summary(results):
-    """P0-01：按本轮真实结果统计 REJECTED 的 failure_reason。"""
+    """P0-01：按本轮真实结果统计 REJECTED 的 failure_reason（顶层 §16）。"""
     counter = {}
     for n in results:
         if n.stage == Stage.REJECTED.value and n.failure_reason:
             counter[n.failure_reason] = counter.get(n.failure_reason, 0) + 1
     return counter
+
+
+def _build_reject_summary_detailed(results):
+    """V0.2.2 P0-01：按细分原因（SubReason）统计；无细分回退到顶层。"""
+    counter = {}
+    for n in results:
+        if n.stage != Stage.REJECTED.value:
+            continue
+        sub = (n.failure_detail or {}).get("sub_reason") or n.failure_reason
+        counter[sub] = counter.get(sub, 0) + 1
+    return counter
+
+
+def _build_stage_summary(results):
+    """V0.2.2 P1-03：按失败阶段（DiagnosticStage）统计。"""
+    counter = {}
+    for n in results:
+        if n.stage != Stage.REJECTED.value:
+            continue
+        st = n.failure_stage or "UNKNOWN"
+        counter[st] = counter.get(st, 0) + 1
+    return counter
+
+
+def _build_reject_summary_by_protocol(results):
+    """V0.2.2 P0-04：按协议统计 total / failed / 各细分原因数。
+
+    用于判断"协议整体失效"（如某协议 total=failed 且集中于一个细分原因）。
+    """
+    by_proto = {}
+    for n in results:
+        rec = by_proto.setdefault(n.protocol or "unknown",
+                                  {"total": 0, "failed": 0})
+        rec["total"] += 1
+        if n.stage == Stage.REJECTED.value:
+            rec["failed"] += 1
+            sub = (n.failure_detail or {}).get("sub_reason") or n.failure_reason
+            rec[sub] = rec.get(sub, 0) + 1
+    return by_proto
+
+
+def _collect_source_health(cfg, round_id, raw_items, parsed_nodes,
+                           valid_nodes, final_nodes):
+    """V0.2.2 P0-05：更新 state/source_health.json。"""
+    parsed_by_source = {}
+    for n in parsed_nodes:
+        parsed_by_source[n.source] = parsed_by_source.get(n.source, 0) + 1
+    valid_by_source = {}
+    for n in valid_nodes:
+        valid_by_source[n.source] = valid_by_source.get(n.source, 0) + 1
+    alive_by_source = {}
+    for n in final_nodes:
+        alive_by_source[n.source] = alive_by_source.get(n.source, 0) + 1
+    raw_sources = {src for src, _ in raw_items}
+    sh = source_health.SourceHealth(cfg.sub("state/source_health.json"))
+    return sh.update_round(cfg.node_source_urls, raw_sources,
+                           parsed_by_source, valid_by_source,
+                           alive_by_source, round_id)
 
 
 def run_refresh(cfg, inject=None):
@@ -174,7 +307,9 @@ def run_refresh(cfg, inject=None):
     summary = {"round_id": round_id, "published": False, "reason": None,
                "bootstrap_failed": False, "new_pool_count": 0,
                "pool_size": 0, "total": 0, "invalid": 0, "dupes": 0,
-               "final_nodes": [], "reject_summary": {}}
+               "final_nodes": [], "reject_summary": {},
+               "reject_summary_detailed": {}, "reject_summary_by_protocol": {},
+               "stage_summary": {}, "failed_node_count": 0}
     history = history_mod.NodeHistory(cfg.sub("state/node_history.json"))
 
     # 1) 获取节点（§26 第一步）；注入的 fetchers 可以是列表或工厂函数
@@ -188,8 +323,8 @@ def run_refresh(cfg, inject=None):
     poolstore.write_raw(cfg, round_id, raw_items)
 
     # 2) 解析 + 去重（§23）
-    nodes, invalid = parser_mod.parse_all(raw_items)
-    nodes, dupes = dedup_mod.dedup(nodes)
+    parsed_nodes, invalid = parser_mod.parse_all(raw_items)
+    nodes, dupes = dedup_mod.dedup(parsed_nodes)
     nodes = nodes[: cfg.max_nodes_per_round]
     summary.update(total=len(nodes), invalid=invalid, dupes=dupes)
     poolstore.write_normalized(cfg, round_id, nodes)
@@ -217,6 +352,14 @@ def run_refresh(cfg, inject=None):
     results = _process_all(cfg, nodes, ctx, round_id, history)
     poolstore.write_results(cfg, round_id, results)
     summary["reject_summary"] = _build_reject_summary(results)
+    summary["reject_summary_detailed"] = _build_reject_summary_detailed(results)
+    summary["reject_summary_by_protocol"] = _build_reject_summary_by_protocol(results)
+    summary["stage_summary"] = _build_stage_summary(results)
+    failed_path = poolstore.write_failed_nodes(cfg, round_id, results)  # P0-02
+    summary["failed_node_count"] = 0
+    if failed_path:
+        with open(failed_path, "r", encoding="utf-8") as f:
+            summary["failed_node_count"] = sum(1 for _ in f)
 
     # 5) 候选最终池（§19 / §22 / P1-11）；评分仅排序，不改准入（P1-03）
     new_pool = [n for n in results
@@ -227,6 +370,10 @@ def run_refresh(cfg, inject=None):
     summary["new_pool_count"] = len(new_pool)
     summary["pool_size"] = len(new_pool)
     summary["final_nodes"] = [n.node_id for n in new_pool]
+
+    # P0-05：源健康统计（真实 pipeline 数据；parsed=解析成功数，valid=去重后）
+    summary["source_health"] = _collect_source_health(
+        cfg, round_id, raw_items, parsed_nodes, nodes, new_pool)
 
     # 6) 发布门（P1-13：非空 + 验证通过才原子替换；否则保留旧池）
     #    P0-02：成功 → current.json 替换；失败 → failed/{round_id}.json
@@ -255,6 +402,7 @@ def _finish_failed(cfg, round_id, summary, history):
         summary["bootstrap_failed"] = True
         log.warning("BOOTSTRAP_FAILED: first run failed, no empty yaml written")
     poolstore.write_round_log(cfg, round_id, summary)
+    _write_refresh_state(cfg, summary)
     history.save()
     return summary
 
@@ -264,5 +412,25 @@ def _finish(cfg, round_id, summary, history):
         summary["bootstrap_failed"] = True
         log.warning("BOOTSTRAP_FAILED: no pool produced, no empty yaml written")
     poolstore.write_round_log(cfg, round_id, summary)
+    _write_refresh_state(cfg, summary)
     history.save()
     return summary
+
+
+def _write_refresh_state(cfg, summary):
+    """V0.2.2 P1-02：最近刷新状态（status 读取 last_refresh/last_success/
+    last_failure_reason）。"""
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    state = {
+        "last_refresh": now,
+        "last_round_id": summary.get("round_id", ""),
+        "published": bool(summary.get("published")),
+        "last_success": (summary.get("round_id", "")
+                         if summary.get("published") else ""),
+        "last_success_at": now if summary.get("published") else "",
+        "last_failure_reason": "" if summary.get("published")
+        else (summary.get("reason") or ""),
+        "pool_size": summary.get("pool_size", 0),
+    }
+    poolstore.write_refresh_state(cfg, state)
+    return state

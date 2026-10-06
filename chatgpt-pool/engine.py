@@ -17,7 +17,11 @@ log = logging.getLogger("pool.engine")
 
 
 class ProxyStartError(Exception):
-    pass
+    """代理启动失败；sub 为 V0.2.2 细分原因（默认 PROXY_HANDSHAKE_FAIL）。"""
+
+    def __init__(self, message="", sub=None):
+        super().__init__(message)
+        self.sub = sub
 
 
 def is_port_open(port, host="127.0.0.1", timeout=0.5):
@@ -55,8 +59,14 @@ class MihomoEngine:
     def start(self, node_dict, mixed_port):
         os.makedirs(self.rundir, exist_ok=True)
         os.makedirs(os.path.dirname(self.logfile), exist_ok=True)
-        cfg_text = emit_mihomo_config([node_dict], mixed_port,
-                                      mode="global", log_level="warning")
+        try:
+            cfg_text = emit_mihomo_config([node_dict], mixed_port,
+                                          mode="global", log_level="warning")
+        except Exception as e:
+            # V0.2.2：节点配置无法生成 → 细分 CONFIG_INVALID
+            from models import SubReason
+            raise ProxyStartError(f"config invalid: {e}",
+                                  sub=SubReason.CONFIG_INVALID)
         cfg_path = os.path.join(self.rundir, "config.yaml")
         with open(cfg_path, "w", encoding="utf-8") as f:
             f.write(cfg_text)

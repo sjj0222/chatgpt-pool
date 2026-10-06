@@ -5,10 +5,12 @@ STRICT_PASS = HOME_OK AND (AUTH_OK OR BACKEND_OK)
 - 单个 endpoint 403 不直接淘汰（§13）；仅当核心检测全部被明确阻断 → OPENAI_BLOCKED。
 - WebSocket 是辅助检测，WS 结果不构成否决（§14）。
 - 检测明细与 failure_reason 分离（P1-04）。
+- V0.2.2：细分原因（SubReason）——全核心阻断 → CHATGPT_BLOCKED；
+  全部 endpoint 传输失败且最高优先级为 TIMEOUT → CHATGPT_TIMEOUT。
 """
 import logging
 
-from models import ChatgptStatus, FailureReason, highest_priority
+from models import ChatgptStatus, FailureReason, SubReason, highest_priority
 from probe import ProbeError
 
 log = logging.getLogger("pool.chatgpt")
@@ -104,20 +106,25 @@ def _probe_backend(res):
 
 
 def run_strict_check(node, probe, cfg):
-    """返回 dict：status / strict_pass / network_pass / detail / failure_reason。"""
+    """返回 dict：status / strict_pass / network_pass / detail / failure_reason /
+    failure_sub / failure_detail（V0.2.2 细分）。"""
     endpoints = {
         "home": cfg.home_endpoint,
         "auth": cfg.auth_endpoint,
         "backend": cfg.backend_endpoint,
     }
     raw = {}
-    errs = []
+    errs = []          # 顶层 reason
+    err_subs = []      # 细分 reason
+    err_detail = {}    # endpoint → detail
     for name, url in endpoints.items():
         try:
             raw[name] = probe(url)
         except ProbeError as e:
             raw[name] = None
             errs.append(e.reason)
+            err_subs.append(e.sub)
+            err_detail[name] = {**e.detail, "url": url}
 
     home = _probe_home(raw["home"])
     auth = _probe_auth(raw["auth"])
@@ -129,6 +136,7 @@ def run_strict_check(node, probe, cfg):
         "backend": backend,
         # §14：WebSocket 仅辅助检测，不构成否决条件。
         "ws": {"tested": False, "result": "WS_NOT_TESTED", "auxiliary": True},
+        "transport_errors": err_detail,
     }
 
     home_ok = home["ok"]
@@ -142,19 +150,37 @@ def run_strict_check(node, probe, cfg):
 
     strict = home_ok and (auth_ok or backend_ok)
 
+    failure_sub = None
+    failure_detail = {"endpoints": {}}
     if strict:
         status = ChatgptStatus.STRICT_PASS
         reason = None
     elif blocked_all:
         status = ChatgptStatus.FAIL
         reason = FailureReason.OPENAI_BLOCKED
+        failure_sub = SubReason.CHATGPT_BLOCKED
+        failure_detail = {"blocked": {"home": home["result"],
+                                      "auth": auth["result"],
+                                      "backend": backend["result"]}}
     elif not any_response:
         status = ChatgptStatus.FAIL
         reason = highest_priority(errs) or FailureReason.CHATGPT_UNREACHABLE
+        if reason == FailureReason.TIMEOUT:
+            # 全部 endpoint 传输失败且超时为主 → 细分 CHATGPT_TIMEOUT（V0.2.2）
+            failure_sub = SubReason.CHATGPT_TIMEOUT
+        else:
+            # 保留与最高优先级顶层原因对应的首个细分原因（如 TLS_TIMEOUT）
+            for r, s in zip(errs, err_subs):
+                if r == reason:
+                    failure_sub = s
+                    break
+        failure_detail = {"transport_errors": err_detail,
+                          "top_sub": ([s.value for s in err_subs] if err_subs else [])}
     else:
         status = (ChatgptStatus.NETWORK_PASS if network_evidence
                   else ChatgptStatus.FAIL)
         reason = FailureReason.STRICT_CHECK_FAIL
+        failure_detail = {"home": home, "auth": auth, "backend": backend}
 
     return {
         "status": status,
@@ -162,4 +188,6 @@ def run_strict_check(node, probe, cfg):
         "network_pass": status in (ChatgptStatus.NETWORK_PASS, ChatgptStatus.STRICT_PASS),
         "detail": detail,
         "failure_reason": reason,
+        "failure_sub": failure_sub,
+        "failure_detail": failure_detail,
     }

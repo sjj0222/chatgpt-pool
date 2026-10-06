@@ -103,9 +103,12 @@ class ProductionMihomo:
         api_open = is_port_open(self.cfg.mihomo_api_port)
         cur = poolstore.read_current_final(self.cfg)
         active_pool = None
+        current_pool_age = None
         if cur is not None:
             active_pool = {"count": len(cur["nodes"]),
                            "round_id": cur["round_id"]}
+            current_pool_age = self._pool_age(cur)
+        rst = poolstore.read_refresh_state(self.cfg)   # V0.2.2 P1-02
         return {
             "running": bool(alive and proxy_open),
             "pid": pid,
@@ -122,7 +125,26 @@ class ProductionMihomo:
             "api_port": self.cfg.mihomo_api_port,
             "config": self.config_path,
             "log": self.log_path,
+            # V0.2.2 P1-02：最近刷新状态（供用户判断池是否最新）
+            "last_refresh": rst.get("last_refresh"),
+            "last_success": rst.get("last_success") or None,
+            "last_success_at": rst.get("last_success_at") or None,
+            "last_failure_reason": rst.get("last_failure_reason") or None,
+            "current_pool_age": current_pool_age,
         }
+
+    @staticmethod
+    def _pool_age(cur):
+        """current.json published_at → 距今秒数（无时间戳返回 None）。"""
+        import datetime
+        ts = (cur or {}).get("published_at", "")
+        if not ts:
+            return None
+        try:
+            dt = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+        return max(0, int((datetime.datetime.now() - dt).total_seconds()))
 
     # ---- 生命周期 ----
     def start(self, nodes=None):

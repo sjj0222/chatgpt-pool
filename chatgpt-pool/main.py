@@ -47,6 +47,35 @@ def _setup_logging(cfg):
     rj.propagate = False
     rj.addHandler(logging.FileHandler(
         cfg.sub("logs/reject.log"), encoding="utf-8"))
+    # V0.2.2 P0-03：分阶段检测日志 logs/detect.log
+    dt = logging.getLogger("pool.detect")
+    dt.setLevel(logging.INFO)
+    dt.propagate = False
+    dt.addHandler(logging.FileHandler(
+        cfg.sub("logs/detect.log"), encoding="utf-8"))
+
+
+def _print_detection_result(summary):
+    """V0.2.2 P1-03：refresh 输出分阶段检测统计。"""
+    print("Detection Result")
+    print(f"Total:   {summary.get('total', 0)}")
+    print(f"Failed:  {summary.get('failed_node_count', 0)}")
+    st = summary.get("stage_summary", {})
+    if st:
+        print("Stage:   " + ", ".join(f"{k} {v}" for k, v in st.items()))
+    print("Reason:  " + ", ".join(
+        f"{k} {v}" for k, v in sorted(
+            summary.get("reject_summary_detailed", {}).items(),
+            key=lambda kv: -kv[1])))
+    bp = summary.get("reject_summary_by_protocol", {})
+    if bp:
+        print("Protocol:")
+        for proto, rec in sorted(bp.items()):
+            line = f"  {proto}: total={rec['total']} failed={rec['failed']}"
+            subs = {k: v for k, v in rec.items() if k not in ("total", "failed")}
+            if subs:
+                line += " " + ", ".join(f"{k} {v}" for k, v in subs.items())
+            print(line)
 
 
 def cmd_init(cfg):
@@ -61,6 +90,7 @@ def cmd_init(cfg):
 
 def cmd_refresh(cfg):
     summary = pipeline.run_refresh(cfg)
+    _print_detection_result(summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary.get("published") else 1
 

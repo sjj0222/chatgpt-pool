@@ -31,12 +31,17 @@
 ├── server.py              订阅服务（仅 127.0.0.1，P1-08）
 ├── scheduler.py           定时刷新（发布后可回调热重载生产 Mihomo）
 ├── yaml_lite.py           零依赖 YAML 生成/校验（订阅 + Mihomo 配置）
+├── source_health.py       数据源健康统计（V0.2.2 P0-05）
 ├── supported_countries.json   国家列表本地缓存（自动生成）
 ├── raw/ normalized/ results/ state/ logs/ run/   运行数据（§24）
 ├── final/current.json     当前有效最终池（成功发布原子替换，V0.2.1 P0-02）
 ├── final/failed/          失败轮次诊断（绝不覆盖 current.json）
+├── final/failed/nodes/    失败节点明细 jsonl（V0.2.2 P0-02，≤1000）
 ├── state/node_history.json    节点跨轮历史（P1-02）
+├── state/source_health.json   数据源健康（V0.2.2 P0-05）
+├── state/refresh_state.json   最近刷新状态（V0.2.2 P1-02）
 ├── logs/reject.log        REJECTED 明细（P1-04，与 pool.log/mihomo.log 分离）
+├── logs/detect.log        分阶段检测日志（V0.2.2 P0-03）
 └── chatgpt.yaml           最终订阅（原子替换产生）
 ```
 
@@ -85,6 +90,40 @@ bash test_termux.sh
   速度×20` 仅用于排序，**不改变 V5.2 淘汰规则与准入条件**。
 - **P1-04 日志分离**：`logs/pool.log`（主流程）、`logs/mihomo.log`（常驻进程）、
   `logs/reject.log`（REJECTED 明细）。
+
+## V0.2.2 Diagnostic Enhancement
+
+唯一目标：回答"节点为什么失败"。**不改变 V0.2.1 稳定行为**
+（准入/淘汰/评分/顶层 failure_reason §16 与优先级全部不变）。
+
+- **P0-01 失败分层**：每个 REJECTED 节点带三要素——`failure_reason`（顶层 §16，
+  驱动统计/准入不变）+ `failure_stage`（哪一步：PARSE/PROXY/EGRESS/COUNTRY/
+  TLS/CHATGPT/STABILITY/CONFIG/UNKNOWN）+ `failure_detail`（为什么：
+  `sub_reason` 细分枚举 + elapsed_ms/server/port 等上下文）。
+  细分枚举：TCP_TIMEOUT / TCP_REFUSED / TCP_ERROR / PROXY_HANDSHAKE_FAIL /
+  TLS_TIMEOUT / TLS_CERT_FAIL / TLS_SNI_FAIL / TLS_HANDSHAKE_FAIL / NO_EGRESS_IP /
+  EGRESS_TIMEOUT / CHATGPT_BLOCKED / CHATGPT_TIMEOUT / CONFIG_INVALID /
+  UNKNOWN_FAIL。
+  口径：ProxyProbe 每次调用先做 TCP 前置探测（代理端口不通 →
+  PROXY_HANDSHAKE_FAIL）；https 超时归 TLS_TIMEOUT；egress 超时归 EGRESS_TIMEOUT；
+  全部 endpoint 传输失败且超时为主 → CHATGPT_TIMEOUT。
+- **P0-02 失败节点明细**：`final/failed/nodes/{round_id}.jsonl`，每行一个
+  失败节点（node_id/protocol/server/port/source/stage/failure_reason/
+  failure_stage/failure_detail/sub_reason）；P1-01 每轮最多 1000 条，保留最近。
+- **P0-03 detect.log**：`logs/detect.log` 记录逐阶段事件
+  （`node_id STAGE START` / `node_id STAGE END result reason`）。
+- **P0-04 协议统计**：`reject_summary_by_protocol`——每个协议
+  `{total, failed, <细分原因>…}`，用于判断"某协议整体失效"。
+- **P0-05 源健康**：`state/source_health.json`——每个源
+  `{fetch, parsed, valid, alive, alive_rate, last_refresh}`；
+  alive_rate = alive/parsed；区分源不可用（fetch=false）≠ 节点不可用
+  （parsed>0 但 alive=0）。
+- **P1-02 status 增强**：`mihomo status` 增加
+  `last_refresh / last_success / last_failure_reason / current_pool_age`。
+- **P1-03 refresh 输出**：refresh 先打印
+  `Detection Result（Total/Failed/Stage/Reason/Protocol）`，再输出完整 JSON。
+- **新增统计字段**：`reject_summary_detailed`（细分原因计数）、`stage_summary`
+  （阶段计数）、`failed_node_count`；`state/refresh_state.json` 记录最近刷新状态。
 
 ## 生产 Mihomo 常驻（P1-08 细化）
 
