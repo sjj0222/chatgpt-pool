@@ -123,3 +123,31 @@
    目录存在不代表写入失败轮次）。
 5. run_tests 新增/强化断言（refresh_state 四字段、detect.log 五要素），
    总测试数维持 109 全绿。
+
+## 11. V0.2.2.2 Diagnostic Persistence + Lifecycle Cleanup 验证
+
+修复失败路径诊断产物缺失（系统级提前 return 时 source_health/failed-nodes 不落盘）
+与 mihomo stop 端口残留误报。核心逻辑零改动（准入/淘汰/评分/§16/SubReason/
+pipeline/空池保护/原子替换/mihomo start 与 config）。
+
+| 项 | 结果 |
+|---|---|
+| 单元/Mock 全量 | ✅ 118/118 全绿（109 基线 + 9 新增：Persistence 5 + Lifecycle 4） |
+| Persistence | ✅ 空池写盘（failed round + failed/nodes 明细 + source_health + detect.log + refresh_state 五产物）；bootstrap_failed 写盘；COUNTRY_LIST_UNAVAILABLE 提前 return 兜底（fetch/parsed 真实、valid=0/alive=0、failed/nodes 空文件、detect.log Reason=原因）；INTERNAL_ERROR 全部源失败（每源 fetch=false/parsed=0、failed/nodes 空文件）；refresh_state 六字段两态 |
+| Lifecycle | ✅ stop 等待/确认 PID 退出/确认 7890+9090 释放；pid 不存在（pid_exited=True、端口视为释放）；端口未释放（ports={7890:False}、绝不 kill 其他进程）；CLI 输出 PASS port released / PORT_RELEASE_TIMEOUT port=7890 |
+| 真实冒烟（COUNTRY_LIST_UNAVAILABLE） | ✅ 五产物全落盘：failed/round.json、failed/nodes（空文件 0B）、source_health（SOURCE_A fetch=true parsed=3 valid=0 alive=0）、detect.log（round=/Stage:(none)/Reason:COUNTRY_LIST_UNAVAILABLE/Protocol:(none)/Detection Result）、refresh_state（status=COUNTRY_LIST_UNAVAILABLE + 六字段）；bootstrap_failed=True、无空 chatgpt.yaml |
+| bash -n test_termux.sh | ✅ 无输出、exit 0；step 6 Lifecycle 验收文案更新 |
+
+## 12. V0.2.2.2 修复记录
+
+1. detect.log 摘要改为直接落盘 run/detect.log（不依赖 main 的 logger handler），
+   保证 pipeline 直调/提前 return 路径产物必在；五要素无数据时输出 (none)。
+2. _finish_failed 增加 raw_items/parsed_nodes/nodes 参数，系统级失败兜底收集
+   source_health（fetch/parsed 真实、valid=0——节点未进入检测流程）并
+   write_failed_nodes(always=True) 生成空 jsonl。
+3. write_failed_nodes 增加 always 参数（无 REJECTED 也创建空文件）；
+   _finish 未发布分支补 failed/nodes（VALIDATION_FAIL 无 REJECTED 场景），
+   已存在则不重复覆盖（EMPTY_POOL 由步骤 4 写入）。
+4. mihomo stop：kill 后 _wait_ports_released 轮询（1 秒一次、最多 5 秒）
+   确认 7890/9090 释放；返回 pid_exited/ports；CLI 打印 PASS/
+   PORT_RELEASE_TIMEOUT。只操作 PID 文件记录的进程（§33）。

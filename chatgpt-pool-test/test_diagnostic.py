@@ -467,5 +467,129 @@ class TestRefreshState(unittest.TestCase):
         self.assertEqual(st["pool_size"], 0)
 
 
+class TestPersistenceV0222(unittest.TestCase):
+    """V0.2.2.2：失败路径诊断持久化——无论 refresh 结果，五个诊断产物必落盘。
+
+    覆盖：空池失败写盘 / bootstrap_failed 写盘 / failed nodes 生成（含无节点
+    空文件）/ refresh_state 字段 / 系统级失败（国家列表不可用、全部源失败）。
+    """
+
+    def _assert_artifacts(self, cfg, round_id, failed_nodes_exists=True):
+        self.assertTrue(os.path.isfile(cfg.sub(f"run/failed/{round_id}.json")),
+                        "失败轮摘要缺失")
+        self.assertTrue(os.path.isfile(cfg.sub("run/source_health.json")),
+                        "source_health 缺失")
+        self.assertTrue(os.path.isfile(cfg.sub("run/detect.log")),
+                        "detect.log 缺失")
+        self.assertTrue(os.path.isfile(cfg.sub("run/refresh_state.json")),
+                        "refresh_state 缺失")
+        if failed_nodes_exists:
+            self.assertTrue(
+                os.path.isfile(cfg.sub(f"run/failed/nodes/{round_id}.jsonl")),
+                "failed/nodes jsonl 缺失")
+
+    def test_empty_pool_persists_all_artifacts(self):
+        """空池（全节点 REJECTED）：五个产物全在，failed/nodes 有明细。"""
+        cfg = make_cfg("d_p_emp")
+        with LocalMockSite(strict_success_routes()) as site:
+            s = pipeline.run_refresh(cfg, inject=_inject(
+                site, probe_fn=_mixed_fail_probe(site)))
+        self.assertFalse(s["published"])
+        self.assertEqual(s["reason"], "EMPTY_POOL")
+        self._assert_artifacts(cfg, s["round_id"])
+        with open(cfg.sub(f"run/failed/nodes/{s['round_id']}.jsonl")) as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(rows), 3)  # NODE_A/B/C 全部 TLS 失败
+        row = rows[0]
+        for field in ("node_id", "failure_reason", "failure_stage",
+                      "failure_detail"):
+            self.assertIn(field, row)
+
+    def test_bootstrap_failed_persists(self):
+        """首次运行 + 空池：bootstrap_failed=True，五个产物仍在。"""
+        cfg = make_cfg("d_p_bs")
+        with LocalMockSite(strict_success_routes()) as site:
+            s = pipeline.run_refresh(cfg, inject=_inject(
+                site, probe_fn=_mixed_fail_probe(site)))
+        self.assertFalse(s["published"])
+        self.assertTrue(s["bootstrap_failed"])
+        self.assertFalse(os.path.exists(cfg.pool_path))  # 不生成空 YAML
+        self._assert_artifacts(cfg, s["round_id"])
+
+    def test_country_unavailable_persists(self):
+        """COUNTRY_LIST_UNAVAILABLE（系统级，提前 return）：source_health 兜底
+        真实 fetch/parsed、valid=0/alive=0；failed/nodes 空文件。"""
+        cfg = make_cfg("d_p_clu")
+        cfg.node_source_urls = [SOURCE_A, SOURCE_B]   # 配置源 = 本轮抓取源
+        inject = _inject(LocalMockSite(strict_success_routes()))
+        inject["country_resolver"] = lambda cfg: (None, "offline", "")
+        s = pipeline.run_refresh(cfg, inject=inject)
+        self.assertFalse(s["published"])
+        self.assertEqual(s["reason"], "COUNTRY_LIST_UNAVAILABLE")
+        self._assert_artifacts(cfg, s["round_id"])
+        # 兜底 source_health：解析成功来源 parsed 真实、valid=0（未进入检测）
+        with open(cfg.sub("run/source_health.json")) as f:
+            sh = json.load(f)
+        self.assertTrue(sh)
+        self.assertEqual(sh[SOURCE_A]["fetch"], True)
+        self.assertEqual(sh[SOURCE_A]["parsed"], 3)
+        self.assertEqual(sh[SOURCE_B]["parsed"], 2)
+        self.assertTrue(all(v["valid"] == 0 and v["alive"] == 0
+                            for v in sh.values()))
+        # failed/nodes 空文件存在（无 REJECTED）
+        p = cfg.sub(f"run/failed/nodes/{s['round_id']}.jsonl")
+        self.assertTrue(os.path.isfile(p))
+        self.assertEqual(open(p).read(), "")
+        # detect.log 摘要含系统级 Reason
+        text = open(cfg.sub("run/detect.log")).read()
+        self.assertIn("round=", text)
+        self.assertIn("Reason: COUNTRY_LIST_UNAVAILABLE", text)
+        # refresh_state status=原因
+        st = poolstore.read_refresh_state(cfg)
+        self.assertEqual(st["status"], "COUNTRY_LIST_UNAVAILABLE")
+        self.assertEqual(st["last_failure_reason"], "COUNTRY_LIST_UNAVAILABLE")
+
+    def test_all_sources_failed_persists(self):
+        """INTERNAL_ERROR（全部源失败）：source_health 每源 fetch=false/parsed=0，
+        failed/nodes 空文件，refresh_state 记录原因。"""
+        cfg = make_cfg("d_p_src")
+        inject = _inject(LocalMockSite(strict_success_routes()))
+        with mock.patch("pipeline.fetchers.fetch_sources", return_value=[]):
+            s = pipeline.run_refresh(cfg, inject=inject)
+        self.assertFalse(s["published"])
+        self.assertIn("INTERNAL_ERROR", s["reason"])
+        self._assert_artifacts(cfg, s["round_id"])
+        with open(cfg.sub("run/source_health.json")) as f:
+            sh = json.load(f)
+        self.assertTrue(sh)
+        for v in sh.values():
+            self.assertFalse(v["fetch"])
+            self.assertEqual(v["parsed"], 0)
+            self.assertEqual(v["valid"], 0)
+            self.assertEqual(v["alive"], 0)
+            self.assertEqual(v["alive_rate"], 0)
+        p = cfg.sub(f"run/failed/nodes/{s['round_id']}.jsonl")
+        self.assertTrue(os.path.isfile(p))
+        self.assertEqual(open(p).read(), "")
+        st = poolstore.read_refresh_state(cfg)
+        self.assertEqual(st["status"], s["reason"])
+        self.assertIn("last_failure_reason", st)
+
+    def test_refresh_state_required_fields(self):
+        """refresh_state 至少含 round_id/status/published/pool_size/
+        last_refresh/last_failure_reason（成功与失败两态）。"""
+        cfg = make_cfg("d_p_rf")
+        with LocalMockSite(strict_success_routes()) as site:
+            s = pipeline.run_refresh(cfg, inject=_inject(site))
+        self.assertTrue(s["published"])
+        st = poolstore.read_refresh_state(cfg)
+        for field in ("round_id", "status", "published", "pool_size",
+                      "last_refresh", "last_failure_reason"):
+            self.assertIn(field, st)
+        self.assertTrue(st["round_id"])
+        self.assertEqual(st["status"], "published")
+        self.assertTrue(st["published"])
+
+
 if __name__ == "__main__":
     unittest.main()

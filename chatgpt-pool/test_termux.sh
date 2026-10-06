@@ -74,8 +74,17 @@ else
 fi
 
 step 6 "停止：python3 main.py mihomo stop"
-if python3 main.py mihomo stop; then ok "stop 完成"; else bad "stop 失败"; fi
-# 停止后确认 7890/9090 已释放
+OUT=$(python3 main.py mihomo stop)
+echo "$OUT"
+# V0.2.2.2 Lifecycle 验收：stop 后 7890/9090 必须释放（PASS/PORT_RELEASE_TIMEOUT）
+if echo "$OUT" | grep -q "PASS port released"; then
+    ok "ports released（7890/9090）"
+elif echo "$OUT" | grep -q "PORT_RELEASE_TIMEOUT"; then
+    bad "PORT_RELEASE_TIMEOUT（stop 后仍有端口占用）"
+else
+    bad "stop 输出异常"
+fi
+# 停止后独立复核 7890/9090 已释放
 sleep 1
 python3 - <<'PY'
 import socket
@@ -85,7 +94,7 @@ for p in (7890, 9090):
     if s.connect_ex(("127.0.0.1", p)) == 0:
         busy.append(p)
     s.close()
-print("端口释放检查:", "OK" if not busy else f"仍占用: {busy}")
+print("端口释放复核:", "OK" if not busy else f"仍占用: {busy}")
 PY
 
 echo

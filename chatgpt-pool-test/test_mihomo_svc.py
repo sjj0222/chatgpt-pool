@@ -204,6 +204,72 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         self.assertTrue(st["running"])
         self.assertEqual(st["pid"], os.getpid())
 
+    # ---- V0.2.2.2：stop 生命周期增强（等待/确认 PID 退出/确认端口释放）----
+
+    def test_stop_confirms_pid_exit_and_ports(self):
+        """kill → 等待 → 确认 PID 退出 → 确认 7890/9090 释放。"""
+        with open(self.svc.pid_path, "w", encoding="utf-8") as f:
+            f.write("12345")
+        # _proc_alive 调用序列：初始判定 True → 进入终止；轮询第一次 False 退出；
+        # 之后均为 False → pid_exited=True
+        seq = [True, True, False, False, False]
+        with mock.patch("mihomo_svc._proc_alive", side_effect=seq), \
+             mock.patch("mihomo_svc.is_port_open", return_value=False):
+            summary = self.svc.stop()
+        self.assertTrue(summary["stopped"])
+        self.assertEqual(summary["pid"], 12345)
+        self.assertTrue(summary["pid_exited"])
+        self.assertEqual(summary["ports"],
+                         {self.cfg.prod_mihomo_port: True,
+                          self.cfg.mihomo_api_port: True})
+
+    def test_stop_pid_not_exists_reports_released(self):
+        """无 PID 文件：pid_exited=True（无进程），端口未被占用即视为释放。"""
+        summary = self.svc.stop()
+        self.assertTrue(summary["stopped"])
+        self.assertIsNone(summary["pid"])
+        self.assertTrue(summary["pid_exited"])
+        self.assertTrue(all(summary["ports"].values()))
+
+    def test_stop_port_release_timeout(self):
+        """端口未释放：返回 ports={7890: False}，绝不 kill 其他进程。"""
+        with open(self.svc.pid_path, "w", encoding="utf-8") as f:
+            f.write("12345")
+        with mock.patch("mihomo_svc._proc_alive", return_value=False), \
+             mock.patch.object(
+                 self.svc, "_wait_ports_released",
+                 return_value={self.cfg.prod_mihomo_port: False,
+                               self.cfg.mihomo_api_port: True}):
+            summary = self.svc.stop()
+        self.assertTrue(summary["pid_exited"])
+        self.assertFalse(summary["ports"][self.cfg.prod_mihomo_port])
+        self.assertTrue(summary["ports"][self.cfg.mihomo_api_port])
+
+    def test_cli_stop_prints_pass_and_timeout(self):
+        """CLI 输出：PASS port released / PORT_RELEASE_TIMEOUT port=xxx。"""
+        import contextlib
+        import io
+        _write_final(self.cfg, [_node("a")])
+        with mock.patch.object(
+                mihomo_svc.ProductionMihomo, "_wait_ports_released",
+                return_value={self.cfg.prod_mihomo_port: False,
+                              self.cfg.mihomo_api_port: True}):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main_mod.cmd_mihomo(self.cfg, "stop")
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("PORT_RELEASE_TIMEOUT port=7890", out)
+        self.assertNotIn("PASS port released", out)
+        with mock.patch.object(
+                mihomo_svc.ProductionMihomo, "_wait_ports_released",
+                return_value={self.cfg.prod_mihomo_port: True,
+                              self.cfg.mihomo_api_port: True}):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                main_mod.cmd_mihomo(self.cfg, "stop")
+        self.assertIn("PASS port released", buf.getvalue())
+
 
 class TestProductionMihomoReload(unittest.TestCase):
     def setUp(self):

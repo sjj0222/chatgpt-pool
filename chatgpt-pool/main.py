@@ -112,6 +112,14 @@ def cmd_mihomo(cfg, action):
         summary = svc.start()
     elif action == "stop":
         summary = svc.stop()
+        # V0.2.2.2：stop 生命周期验收（PASS port released / PORT_RELEASE_TIMEOUT）
+        ports = summary.get("ports", {})
+        timeout_ports = [p for p, released in ports.items() if not released]
+        if not timeout_ports:
+            print("PASS port released")
+        else:
+            for p in timeout_ports:
+                print(f"PORT_RELEASE_TIMEOUT port={p}")
     elif action == "restart":
         summary = svc.restart()
     elif action == "status":

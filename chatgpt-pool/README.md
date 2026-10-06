@@ -158,6 +158,31 @@ V0.2.2 核心诊断能力**，节点准入/淘汰/评分/顶层 failure_reason/p
   `run/detect.log`、`run/refresh_state.json`（`[PASS] xxx exists` /
   `[FAIL] xxx missing`）；目录隔离检查同步指向 `run/`。
 
+## V0.2.2.2 Diagnostic Persistence + Lifecycle Cleanup
+
+修复真机验收发现的失败路径诊断产物缺失 + mihomo 生命周期清理误报。
+**核心行为完全不变**（准入/淘汰/评分/排序/去重/§16 failure_reason/
+DiagnosticStage/SubReason/pipeline 流程/空池保护/原子替换/mihomo start 与
+config 生成全部保持 V0.2.2.1）。
+
+- **P0 失败路径持久化**：无论 refresh 最终结果（成功池/空池/
+  bootstrap_failed/全节点失败/系统级失败），五个诊断产物必生成：
+  `run/source_health.json`（失败也保存：fetch/parsed 真实、未进入检测阶段
+  valid=0/alive=0）、`run/detect.log`（五要素恒在，无数据输出 `(none)`）、
+  `run/refresh_state.json`（round_id/status/published/pool_size/last_refresh/
+  last_failure_reason）、`run/failed/{round_id}.json`、
+  `run/failed/nodes/{round_id}.jsonl`（无 REJECTED 也生成空文件）。
+  系统级提前 return（INTERNAL_ERROR / COUNTRY_LIST_UNAVAILABLE）在
+  `_finish_failed` 兜底收集 source_health；detect.log 摘要直接落盘
+  （不依赖 logger handler 配置）。
+- **P1 stop 生命周期增强**：`mihomo stop` 增加 kill → 等待（每 1 秒检查、
+  最多 5 秒）→ 确认 PID 退出 → 确认 7890/9090 端口释放；返回
+  `pid_exited` + `ports`。CLI 输出 `PASS port released` 或
+  `PORT_RELEASE_TIMEOUT port=7890`。只操作 `run/prod/mihomo.pid` 记录的
+  PID（§33），禁止 kill 其他进程/pkill。
+- **test_termux.sh**：step 6 改为 Lifecycle 验收（`[PASS] ports released` /
+  `[FAIL] PORT_RELEASE_TIMEOUT`）；Diagnostic check_file 保留。
+
 ## 生产 Mihomo 常驻（P1-08 细化）
 
 `run --mihomo` 会以最新最终池启动常驻 Mihomo 并在每次刷新发布成功后自动热重载；

@@ -65,17 +65,19 @@ def write_failed_round(cfg, round_id, summary):
     return path
 
 
-def write_failed_nodes(cfg, round_id, nodes, limit=1000):
+def write_failed_nodes(cfg, round_id, nodes, limit=1000, always=False):
     """失败节点明细写入 run/failed/nodes/{round_id}.jsonl（V0.2.2 P0-02 /
     V0.2.2.1 路径）。
 
     每行一个 JSON：node_id/protocol/server/port/source/stage/failure_reason/
     failure_stage/failure_detail/sub_reason。
     P1-01：每轮最多保存 1000 条，超过时保留最近（输入顺序靠后）。
+    V0.2.2.2：失败轮次（always=True）即使无 REJECTED 也生成空 jsonl——
+    保证"空池/失败路径"诊断产物不缺失。
     """
     rejected = [n for n in nodes if n.stage == "REJECTED"]
     recent = rejected[-limit:]
-    if not recent:
+    if not recent and not always:
         return None
     path = cfg.sub(f"run/failed/nodes/{round_id}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)

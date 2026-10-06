@@ -213,6 +213,21 @@ class ProductionMihomo:
         raise ProxyStartError(
             f"mihomo not ready in {self.cfg.mihomo_start_timeout}s; see {self.log_path}")
 
+    def _wait_ports_released(self, max_wait=5):
+        """V0.2.2.2：轮询等待 7890/9090 释放（每 1 秒一次，最多 max_wait 秒）。
+
+        返回 {port: released_bool}；禁止无限等待、禁止触碰其他进程。
+        """
+        ports = (self.cfg.prod_mihomo_port, self.cfg.mihomo_api_port)
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            busy = [p for p in ports if is_port_open(p)]
+            if not busy:
+                break
+            time.sleep(1)
+        busy = [p for p in ports if is_port_open(p)]
+        return {p: (p not in busy) for p in ports}
+
     def _clear_pid(self):
         try:
             os.remove(self.pid_path)
@@ -220,10 +235,15 @@ class ProductionMihomo:
             pass
 
     def stop(self):
-        """只终止 PID 文件记录的进程（§33：绝不触碰其他 PID）。"""
+        """只终止 PID 文件记录的进程（§33：绝不触碰其他 PID）。
+
+        V0.2.2.2 生命周期增强：kill → 等待 → 确认 PID 退出 → 确认 7890/9090
+        端口释放（每 1 秒检查一次，最多 5 秒）。
+        """
         pid = self._read_pid()
         proc = self._proc if (self._proc is not None
                               and self._proc.pid == pid) else None
+        pid_exited = not _proc_alive(pid)
         if pid and _proc_alive(pid):
             try:
                 os.kill(pid, signal.SIGTERM)
@@ -251,9 +271,12 @@ class ProductionMihomo:
                     except Exception:
                         pass
             log.info("prod mihomo stopped pid=%s", pid)
+            pid_exited = not _proc_alive(pid)
         self._proc = None
         self._clear_pid()
-        return {"stopped": True, "pid": pid}
+        ports = self._wait_ports_released()
+        return {"stopped": True, "pid": pid, "pid_exited": pid_exited,
+                "ports": ports}
 
     def restart(self, nodes=None):
         self.stop()

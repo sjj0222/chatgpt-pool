@@ -29,6 +29,13 @@ V0.2.2.1 Diagnostic Fix：
   run/failed/nodes/{round_id}.jsonl、run/source_health.json、run/detect.log、
   run/refresh_state.json）；detect.log 追加轮次摘要
   （round_id / Detection Result / Stage / Reason / Protocol）。
+
+V0.2.2.2 Diagnostic Persistence：
+- 失败路径（INTERNAL_ERROR / COUNTRY_LIST_UNAVAILABLE / BOOTSTRAP_FAILED /
+  空池）也必须持久化全部诊断产物：source_health（fetch/parsed 真实、未检测
+  阶段 valid=0/alive=0）、failed/nodes（无 REJECTED 也生成空 jsonl）、
+  detect.log 五要素恒在（无数据时输出 (none)）、refresh_state。
+  核心 pipeline 流程 / 空池保护 / 原子替换不变。
 - P1-03：refresh 输出分阶段统计（stage_summary + reject_summary_detailed）。
 """
 import concurrent.futures
@@ -341,7 +348,8 @@ def run_refresh(cfg, inject=None):
     clist, csrc, cwarn = resolver(cfg)
     if not clist:
         summary["reason"] = "COUNTRY_LIST_UNAVAILABLE"
-        return _finish_failed(cfg, round_id, summary, history)
+        return _finish_failed(cfg, round_id, summary, history,
+                              raw_items, parsed_nodes, nodes)
     if cwarn:
         log.warning("%s (country source=%s)", cwarn, csrc)
 
@@ -403,37 +411,70 @@ def run_refresh(cfg, inject=None):
     return _finish(cfg, round_id, summary, history)
 
 
-def _write_detect_summary(summary):
+def _write_detect_summary(cfg, summary):
     """V0.2.2 P0-03 + V0.2.2.1：detect.log 写入轮次摘要（round_id / Detection
-    Result / Stage / Reason / Protocol）。"""
-    detect_log.info("round=%s published=%s pool_size=%s reason=%s",
-                    summary.get("round_id", ""),
-                    summary.get("published"),
-                    summary.get("pool_size", 0),
-                    summary.get("reason") or "")
+    Result / Stage / Reason / Protocol）。
+
+    V0.2.2.2：摘要直接落盘 run/detect.log（不依赖 logger handler 配置），
+    保证失败路径（含提前 return）诊断产物必在；逐节点 START/END 事件仍走
+    pool.detect logger（生产由 main._setup_logging 落盘）。
+    """
+    path = cfg.sub("run/detect.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = [
+        "round=%s published=%s pool_size=%s reason=%s" % (
+            summary.get("round_id", ""),
+            summary.get("published"),
+            summary.get("pool_size", 0),
+            summary.get("reason") or ""),
+    ]
     st = summary.get("stage_summary", {})
     if st:
-        detect_log.info("Stage: " + ", ".join(
+        lines.append("Stage: " + ", ".join(
             f"{k} {v}" for k, v in st.items()))
-    detect_log.info("Reason: " + ", ".join(
-        f"{k} {v}" for k, v in sorted(
-            summary.get("reject_summary_detailed", {}).items(),
-            key=lambda kv: -kv[1])))
+    else:
+        lines.append("Stage: (none)")
+    det = summary.get("reject_summary_detailed", {})
+    if det:
+        lines.append("Reason: " + ", ".join(
+            f"{k} {v}" for k, v in sorted(det.items(),
+                                          key=lambda kv: -kv[1])))
+    elif summary.get("reason"):
+        lines.append("Reason: " + summary["reason"])
+    else:
+        lines.append("Reason: (none)")
     bp = summary.get("reject_summary_by_protocol", {})
     if bp:
-        detect_log.info("Protocol: " + json.dumps(bp, ensure_ascii=False))
-    detect_log.info("Detection Result: total=%s failed_nodes=%s",
-                    summary.get("total", 0),
-                    summary.get("failed_node_count", 0))
+        lines.append("Protocol: " + json.dumps(bp, ensure_ascii=False))
+    else:
+        lines.append("Protocol: (none)")
+    lines.append("Detection Result: total=%s failed_nodes=%s" % (
+        summary.get("total", 0), summary.get("failed_node_count", 0)))
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
-def _finish_failed(cfg, round_id, summary, history):
+def _finish_failed(cfg, round_id, summary, history,
+                   raw_items=None, parsed_nodes=None, nodes=None):
+    """V0.2.2.2：失败路径（系统级失败/全部源失败）也必须持久化全部诊断产物。
+
+    - run/failed/{round_id}.json（摘要）
+    - run/failed/nodes/{round_id}.jsonl（无节点也生成空文件）
+    - run/source_health.json（提前 return 路径未收集则兜底：fetch/parsed 真实、
+      valid=0/alive=0——节点尚未进入检测流程）
+    - run/detect.log 轮次摘要、run/refresh_state.json
+    """
     poolstore.write_failed_round(cfg, round_id, summary)   # P0-02：系统级失败也留痕
     if not os.path.exists(cfg.pool_path):
         summary["bootstrap_failed"] = True
         log.warning("BOOTSTRAP_FAILED: first run failed, no empty yaml written")
+    if "source_health" not in summary:
+        summary["source_health"] = _collect_source_health(
+            cfg, round_id, raw_items or [], parsed_nodes or [],
+            [], [])
+    poolstore.write_failed_nodes(cfg, round_id, nodes or [], always=True)
     poolstore.write_round_log(cfg, round_id, summary)
-    _write_detect_summary(summary)
+    _write_detect_summary(cfg, summary)
     _write_refresh_state(cfg, summary)
     history.save()
     return summary
@@ -443,8 +484,14 @@ def _finish(cfg, round_id, summary, history):
     if not summary["published"] and not os.path.exists(cfg.pool_path):
         summary["bootstrap_failed"] = True
         log.warning("BOOTSTRAP_FAILED: no pool produced, no empty yaml written")
+    # V0.2.2.2：未发布轮次确保 failed/nodes 存在（EMPTY_POOL 已由步骤 4 写入，
+    # 不重复覆盖；VALIDATION_FAIL 无 REJECTED 时补空文件）
+    if not summary["published"]:
+        failed_nodes = cfg.sub(f"run/failed/nodes/{round_id}.jsonl")
+        if not os.path.exists(failed_nodes):
+            poolstore.write_failed_nodes(cfg, round_id, [], always=True)
     poolstore.write_round_log(cfg, round_id, summary)
-    _write_detect_summary(summary)
+    _write_detect_summary(cfg, summary)
     _write_refresh_state(cfg, summary)
     history.save()
     return summary
