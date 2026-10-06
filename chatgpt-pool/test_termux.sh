@@ -138,6 +138,18 @@ if python3 main.py scheduler cleanup >/dev/null 2>&1; then
 else
     bad "scheduler cleanup 失败"
 fi
+echo "-- V0.3.1 Runtime（0.3.1-2/3/4）--"
+if python3 main.py scheduler health_check >/dev/null 2>&1; then
+    ok "health_check 可执行（资源监控+日志轮转+7天报告）"
+else
+    bad "health_check 失败"
+fi
+check_file run/runtime_report.json
+if python3 main.py scheduler backup >/dev/null 2>&1; then
+    ok "scheduler backup 可执行（V0.3.1 自动备份任务）"
+else
+    bad "scheduler backup 失败"
+fi
 if python3 main.py backup >/dev/null 2>&1; then
     ok "backup 可执行（§34）"
 else

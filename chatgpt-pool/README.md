@@ -316,3 +316,18 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
 验收：连续运行 7 天（§40）、ACTIVE 池 20-30、死亡节点自动处理、临时故障自动
 恢复、垃圾源自动降级、历史信用有效、Web 可查看、无需人工维护——由 Termux
 真机执行 `bash test_termux.sh` 并持续运行验证。
+
+## V0.3.1 Runtime Verification（真机稳定性增强）
+
+基于 V0.3（8adeae5）。只增强运行期可靠性，不动检测链/状态机/评分/淘汰：
+
+- **0.3.1-2 Scheduler 稳定性**：SCHEDULE 增加 health_check（10min）/ backup（12h）
+  两个任务；tick 对 refresh/probe/backup/cleanup 加 Lock 保护（禁止
+  refresh/refresh 并发）；running→crash→restart→recover 沿用陈旧锁清理。
+- **0.3.1-3 资源控制**：runtime_monitor 监控 memory（/proc RSS）/ disk /
+  log size / data size；日志超 50MB 自动 rotate（RotatingFileHandler + 手动
+  轮转双路径），禁止无限增长。
+- **0.3.1-4 7 天观察数据**：run/runtime_report.json（uptime_s / pool_size /
+  active_nodes / success_rate / score_average / source_health / error_count /
+  last_refresh / last_failure_reason），由 health_check 周期写入。
+- 新增 CLI：`python3 main.py scheduler health_check|backup`。

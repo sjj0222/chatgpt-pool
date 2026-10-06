@@ -34,23 +34,19 @@ class TestSchedule(unittest.TestCase):
         due = scheduler.due_tasks(cfg, now=1_000_000)
         self.assertEqual(sorted(due), sorted(scheduler.SCHEDULE))
 
+    def _all_runners(self):
+        # V0.3.1：SCHEDULE 六任务（refresh/probe/score/cleanup/health_check/backup）
+        return {name: (lambda: None) for name in scheduler.SCHEDULE}
+
     def test_due_after_tick_none(self):
         cfg = make_cfg("v03_sched2")
-        scheduler.tick(cfg, {"refresh": lambda: None,
-                             "probe": lambda: None,
-                             "score": lambda: None,
-                             "cleanup": lambda: None},
-                       now=1_000_000)
+        scheduler.tick(cfg, self._all_runners(), now=1_000_000)
         due = scheduler.due_tasks(cfg, now=1_000_000 + 10)
         self.assertEqual(due, [])
 
     def test_due_refresh_after_6h(self):
         cfg = make_cfg("v03_sched3")
-        scheduler.tick(cfg, {"refresh": lambda: None,
-                             "probe": lambda: None,
-                             "score": lambda: None,
-                             "cleanup": lambda: None},
-                       now=1_000_000)
+        scheduler.tick(cfg, self._all_runners(), now=1_000_000)
         due = scheduler.due_tasks(cfg, now=1_000_000 + 6 * 3600)
         self.assertIn("refresh", due)     # 6h 到期
         self.assertIn("probe", due)       # 30min 周期早已到期

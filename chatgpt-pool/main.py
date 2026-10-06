@@ -33,27 +33,30 @@ import yaml_lite
 
 
 def _setup_logging(cfg):
+    from logging.handlers import RotatingFileHandler
     os.makedirs(cfg.sub("logs"), exist_ok=True)
     os.makedirs(cfg.sub("run"), exist_ok=True)  # V0.2.2.1：run/detect.log 父目录
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    # V0.3.1（0.3.1-3）：RotatingFileHandler——日志超限自动 rotate，禁止无限增长
+    rfh = RotatingFileHandler(cfg.sub("logs/pool.log"), encoding="utf-8",
+                              maxBytes=50 * 1024 * 1024, backupCount=2)
     logging.basicConfig(
         level=logging.INFO, format=fmt,
-        handlers=[
-            logging.FileHandler(cfg.sub("logs/pool.log"), encoding="utf-8"),
-            logging.StreamHandler(),
-        ])
+        handlers=[rfh, logging.StreamHandler()])
     # P1-04：REJECTED 明细独立落 logs/reject.log
     rj = logging.getLogger("pool.reject")
     rj.setLevel(logging.INFO)
     rj.propagate = False
-    rj.addHandler(logging.FileHandler(
-        cfg.sub("logs/reject.log"), encoding="utf-8"))
+    rj.addHandler(RotatingFileHandler(
+        cfg.sub("logs/reject.log"), encoding="utf-8",
+        maxBytes=50 * 1024 * 1024, backupCount=2))
     # V0.2.2 P0-03 / V0.2.2.1：分阶段检测日志 run/detect.log
     dt = logging.getLogger("pool.detect")
     dt.setLevel(logging.INFO)
     dt.propagate = False
-    dt.addHandler(logging.FileHandler(
-        cfg.sub("run/detect.log"), encoding="utf-8"))
+    dt.addHandler(RotatingFileHandler(
+        cfg.sub("run/detect.log"), encoding="utf-8",
+        maxBytes=50 * 1024 * 1024, backupCount=2))
 
 
 def _print_detection_result(summary):
@@ -233,6 +236,22 @@ def cmd_scheduler(cfg, action):
         res["expired_removed"] = expired
         print(_json.dumps(res, ensure_ascii=False))
         return 0
+    if action == "health_check":
+        # V0.3.1（0.3.1-3/4）：资源监控 + 日志轮转 + 7 天观察报告
+        import runtime_monitor
+        rotated = runtime_monitor.rotate_all_logs(cfg)
+        report = runtime_monitor.build_runtime_report(cfg)
+        runtime_monitor.write_runtime_report(cfg, report)
+        stats = runtime_monitor.resource_stats(cfg)
+        print(_json.dumps({"resources": stats, "rotated": rotated,
+                           "report": report}, ensure_ascii=False, indent=2))
+        return 0
+    if action == "backup":
+        # V0.3.1（0.3.1-2）：自动备份任务
+        import scheduler as _sched
+        base = _sched.backup(cfg)
+        print(_json.dumps({"backup_dir": base}, ensure_ascii=False))
+        return 0
     if action == "tick":
         def _refresh():
             pipeline.run_refresh(cfg)
@@ -249,11 +268,19 @@ def cmd_scheduler(cfg, action):
         def _cleanup():
             cmd_scheduler(cfg, "cleanup")
 
+        def _health_check():
+            cmd_scheduler(cfg, "health_check")
+
+        def _backup():
+            cmd_scheduler(cfg, "backup")
+
         ran = sched_mod.tick(cfg, {"refresh": _refresh, "probe": _probe,
-                                   "score": _score, "cleanup": _cleanup})
+                                   "score": _score, "cleanup": _cleanup,
+                                   "health_check": _health_check,
+                                   "backup": _backup})
         print(_json.dumps(ran, ensure_ascii=False))
         return 0
-    print("usage: python3 main.py scheduler status|tick|probe|score|cleanup|recover")
+    print("usage: python3 main.py scheduler status|tick|probe|score|cleanup|recover|health_check|backup")
     return 2
 
 
@@ -288,8 +315,9 @@ def main(argv=None):
     ap.add_argument("--mihomo", action="store_true", help="run 时同时启动生产 Mihomo")
     ap.add_argument("mihomo_action", nargs="?",
                     choices=["start", "stop", "restart", "status", "reload",
-                             "tick", "probe", "score", "cleanup", "recover"],
-                    help="mihomo 子命令；scheduler 子命令 status/tick/probe/score/cleanup/recover")
+                             "tick", "probe", "score", "cleanup", "recover",
+                             "health_check", "backup"],
+                    help="mihomo 子命令；scheduler 子命令 status/tick/probe/score/cleanup/recover/health_check/backup")
     args = ap.parse_args(argv)
 
     if args.test:

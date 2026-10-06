@@ -39,12 +39,14 @@ import json
 import os
 import shutil
 
-# §23 默认周期（秒）
+# §23 默认周期（秒）；V0.3.1 增加 health_check / backup 任务（0.3.1-2）
 SCHEDULE = {
     "refresh": 6 * 3600,     # 6h
     "probe": 30 * 60,        # 30min
     "score": 1 * 3600,       # 1h
     "cleanup": 24 * 3600,    # 24h
+    "health_check": 10 * 60, # 10min（V0.3.1：资源监控 + runtime_report）
+    "backup": 12 * 3600,     # 12h（V0.3.1：自动备份）
 }
 # §22 探测等级
 PROBE_LEVELS = {
@@ -139,7 +141,8 @@ def due_tasks(cfg, now=None):
 def tick(cfg, runner, now=None):
     """执行全部到期任务（§23）。runner: dict name→callable。
 
-    执行后更新 last_run 并持久化；单任务异常不影响其他任务。
+    V0.3.1（0.3.1-2）：refresh 用 Lock 保护（禁止 refresh/refresh 并发）；
+    单任务异常不影响其他任务；执行后更新 last_run 并持久化。
     """
     now = now if now is not None else int(time.time())
     state = _load_state(cfg)
@@ -151,7 +154,11 @@ def tick(cfg, runner, now=None):
             log.warning("no runner for task %s", name)
             continue
         try:
-            fn()
+            if name in ("refresh", "probe", "backup", "cleanup"):
+                with Lock(cfg, name):
+                    fn()
+            else:
+                fn()
             last[name] = now
             ran[name] = True
         except Exception:
