@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# V0.2.2.1 P0-06：Termux 真实环境六步验收测试
+# V0.3：Termux 真实环境验收测试（V0.2.2.x 六步 + V0.3 Web 验收）
 # 用法：在 Termux 中执行
 #   cp -r chatgpt-pool ~/chatgpt-pool
 #   cd ~/chatgpt-pool
@@ -7,7 +7,7 @@
 set -u
 FAIL=0
 
-step() { echo; echo "===== [$1/6] $2 ====="; }
+step() { echo; echo "===== [$1/7] $2 ====="; }
 ok()   { echo "[PASS] $1"; }
 bad()  { echo "[FAIL] $1"; FAIL=1; }
 
@@ -73,8 +73,7 @@ else
     bad "status 失败"
 fi
 
-step 6 "停止：python3 main.py mihomo stop"
-OUT=$(python3 main.py mihomo stop)
+step 6 "停止：python3 main.py mihomo stop"OUT=$(python3 main.py mihomo stop)
 echo "$OUT"
 # V0.2.2.2 Lifecycle 验收：stop 后 7890/9090 必须释放（PASS/PORT_RELEASE_TIMEOUT）
 if echo "$OUT" | grep -q "PASS port released"; then
@@ -96,6 +95,54 @@ for p in (7890, 9090):
     s.close()
 print("端口释放复核:", "OK" if not busy else f"仍占用: {busy}")
 PY
+
+step 7 "V0.3 Web 管理页面：python3 main.py web（§36，仅 127.0.0.1）"
+python3 main.py web > /tmp/chatgpt-pool-web.log 2>&1 &
+WEB_PID=$!
+sleep 3
+if curl -s http://127.0.0.1:18888/api/health >/dev/null 2>&1; then
+    ok "Dashboard API /api/health 可访问（18888）"
+    if curl -s http://127.0.0.1:18888/node | grep -q "节点生命周期"; then
+        ok "Node 页面渲染正常"
+    else
+        bad "Node 页面渲染异常"
+    fi
+    if curl -s http://127.0.0.1:18888/source | grep -q "数据源"; then
+        ok "Source 页面渲染正常"
+    else
+        bad "Source 页面渲染异常"
+    fi
+    if curl -s http://127.0.0.1:18888/diagnostic | grep -q "refresh_state"; then
+        ok "Diagnostic 页面渲染正常"
+    else
+        bad "Diagnostic 页面渲染异常"
+    fi
+else
+    bad "Dashboard 未能启动（查看 /tmp/chatgpt-pool-web.log）"
+fi
+kill $WEB_PID 2>/dev/null
+wait $WEB_PID 2>/dev/null
+echo "-- V0.3 调度与隔离（§23/§31）--"
+if python3 main.py scheduler status >/dev/null 2>&1; then
+    ok "scheduler status 可执行（refresh6h/probe30min/score1h/cleanup24h）"
+else
+    bad "scheduler status 失败"
+fi
+if python3 main.py scheduler recover >/dev/null 2>&1; then
+    ok "scheduler recover 可执行（崩溃恢复检查）"
+else
+    bad "scheduler recover 失败"
+fi
+if python3 main.py scheduler cleanup >/dev/null 2>&1; then
+    ok "scheduler cleanup 可执行（资源限制+过期清理）"
+else
+    bad "scheduler cleanup 失败"
+fi
+if python3 main.py backup >/dev/null 2>&1; then
+    ok "backup 可执行（§34）"
+else
+    bad "backup 失败"
+fi
 
 echo
 if [ "$FAIL" = 0 ]; then

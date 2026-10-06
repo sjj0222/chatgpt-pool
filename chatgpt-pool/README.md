@@ -277,3 +277,42 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
   alive_rate/连续低质量计数/policy 黑白名单）。
 
 测试：118 基线 + 23 新增（test_models_v03.py）= **141/141 全绿**。
+
+## V0.3 Node Quality Optimization — Phase 2-10（连续交付，免确认）
+
+在 Phase 1 数据模型基础上按 §40 顺序连续完成（每 Phase 单独 commit）：
+
+- **Phase 2 Node 状态机**：`lifecycle.py` LifecycleEngine——晋升（§10：PROBATION
+  必经观察）、降级（§11：1-3 次失败观察，连续失败 DEGRADED→COOLDOWN）、冷却
+  （§12：10min/1h/24h 升级）、恢复（RECOVERING→ACTIVE/FAILED）、过期
+  （§13：30 天 EXPIRED）、BLACKLIST 不可逆。
+- **Phase 3 Fingerprint 去重接入**：`_sync_lifecycle` 填 node_fingerprint，
+  同指纹不同 node_id 继承历史（迁移识别 §3）；不动 V5.2 §23 去重。
+- **Phase 4 评分系统**：`scoring.py` NodeQualityScore（稳定性40+可用率30+延迟
+  20+信用10，窗口 5m/1h/24h/7d 加权，§15 衰减）；ServiceScore 多维（§8）；
+  capability 标签（§9）；pipeline 排序键 quality_score（准入不变 P1-03）。
+- **Phase 5 历史信用**：last_success/last_failure/recover_count 随轮更新，
+  生命周期引擎接入 pipeline + 节点事件（§27）；环境异常识别（§16：同阶段
+  ≥80% 且失败 ≥10 → environment_anomaly，仅诊断不批量删除）。
+- **Phase 6 Source 管理**：`source_mgmt.py` source_score（valid*40+alive_rate
+  *40+频率10+历史10，§18）；生命周期 ACTIVE→DEGRADED→DISABLED（§17），连续
+  7 次 alive_rate<5% 降级（§20）；源隔离（§24 quarantine）；黑白名单
+  （§21 抓取前过滤）；目标 20-30 优质源（§19）。
+- **Phase 7 Scheduler**：`scheduler.py` 任务 refresh6h/probe30min/score1h/
+  cleanup24h（§23）+ 探测等级 L1/L2/L3（§22）；锁 refresh.lock/probe.lock
+  （§32）；崩溃恢复（§31 陈旧锁清理）；备份 backup/{ts}/（§34）；>500MB 自动
+  压缩（§33）；`probe_services.py` 服务探测（github/claude/gemini/web → 
+  probe_scores）；CLI scheduler/backup 子命令。
+- **Phase 8 异常隔离**：`isolation.py` 环境异常发布守卫（§16：拒绝发布保留
+  旧池）；node_group（§25 IP 段/来源关联）；快照回滚（§30 run/history/pool/）；
+  过期清理（§13 EXPIRED 移除）。
+- **Phase 9 Web Dashboard**：`dashboard.py` 纯标准库，仅 127.0.0.1：18888
+  （生产）/18889（测试）；Dashboard/Node/Source/Diagnostic 页面（§36）；
+  API /api/health /api/node /api/source /api/history /api/diagnostic（§37）。
+- **Phase 10 完整验收**：故障模拟（全节点失败旧池保留/源失效诊断产物/数据
+  损坏回滚/Termux 重启恢复）；压力测试 10000 节点解析-去重-指纹；test_termux.sh
+  七步（含 V0.3 Web + 调度 + 备份验收）。
+
+验收：连续运行 7 天（§40）、ACTIVE 池 20-30、死亡节点自动处理、临时故障自动
+恢复、垃圾源自动降级、历史信用有效、Web 可查看、无需人工维护——由 Termux
+真机执行 `bash test_termux.sh` 并持续运行验证。

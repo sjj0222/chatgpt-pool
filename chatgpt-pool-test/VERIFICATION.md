@@ -167,3 +167,23 @@ V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）
 | schema 版本 | ✅ 新文件写 SCHEMA_VERSION=3；旧文件无版本兼容读；upsert 保留未知字段（只增不改） |
 | 事件 | ✅ 追加记录、保留最近 50 条 |
 | 未改动 | ✅ failure_reason/DiagnosticStage/SubReason/Stage/ChatgptStatus/pipeline/诊断产物格式全部保持 |
+
+## 14. V0.3 Phase 2-10 完整验收 验证
+
+用户授权后连续推进，全部 Phase 单独 commit。
+
+| 项 | 结果 |
+|---|---|
+| 单元/Mock 全量 | ✅ 248/248 全绿（新增 lifecycle 18 + pipeline 7 + scoring 26 + credit 8 + source 15 + scheduler 14 + isolation 9 + web 7 + acceptance 6） |
+| 状态机 | ✅ 晋升/降级/冷却升级/恢复/过期/BLACKLIST 全部单测覆盖 |
+| 指纹去重 | ✅ 同指纹历史继承；10000 节点指纹全唯一 |
+| 评分 | ✅ 权重复算、窗口加权、衰减、breakdown、service 多维 |
+| 历史信用 | ✅ last_success/last_failure/recover_count 真实更新 |
+| 环境异常 | ✅ ≥10 失败且同阶段 ≥80% → ENVIRONMENT_ANOMALY 拒绝发布保留旧池 |
+| Source 管理 | ✅ 评分/降级（7 次低质）/隔离/黑白名单 |
+| Scheduler | ✅ 4 任务周期/锁/崩溃恢复/备份/500MB 压缩 |
+| Web | ✅ 4 页面 + 5 API 本机 HTTP 冒烟通过（127.0.0.1:18888/18889） |
+| 故障模拟 | ✅ 全失败旧池保留/源失效五产物/损坏回滚/重启恢复 |
+| 压力测试 | ✅ 10000 节点 parse+dedup+fingerprint 通过 |
+| 脚本 | ✅ bash -n test_termux.sh 通过（七步含 V0.3 验收） |
+| 待真机 | Termux 执行 bash test_termux.sh（web/scheduler/backup step）+ 7 天连续运行验收 |
