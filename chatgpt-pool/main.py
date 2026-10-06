@@ -183,15 +183,97 @@ def cmd_check(cfg):
     return 0
 
 
+def cmd_scheduler(cfg, action):
+    """V0.3 Phase 7：scheduler status|tick|probe|score|cleanup|recover。"""
+    import json as _json
+    import probe_services
+    import scoring as scoring_mod
+    import scheduler as sched_mod
+
+    if action == "status":
+        print(_json.dumps(sched_mod.schedule_status(cfg),
+                          ensure_ascii=False, indent=2))
+        return 0
+    if action == "recover":
+        rec = sched_mod.crash_recover(cfg)
+        print(_json.dumps(rec, ensure_ascii=False, indent=2))
+        return 0
+    if action == "probe":
+        with sched_mod.Lock(cfg, "probe"):
+            pool = poolstore.read_current_final(cfg)
+            node_ids = [n.get("node_id") for n in pool] if pool else []
+            res = probe_services.run_service_probe(cfg, node_ids=node_ids)
+            print(_json.dumps({"probed": len(res)}, ensure_ascii=False))
+        return 0
+    if action == "score":
+        pool = poolstore.read_current_final(cfg) or []
+        from lifecycle_store import NodeLifecycleStore
+        lc = NodeLifecycleStore(cfg.sub("state/node_lifecycle.json"))
+        import time as _t
+        now = int(_t.time())
+        for n in pool:
+            rec = lc.get(n.get("node_id"))
+            if not rec:
+                continue
+            q = scoring_mod.compute_quality_score(rec, now=now)
+            ss = scoring_mod.compute_service_score(rec,
+                                                   n.get("chatgpt_status", ""))
+            rec["score"] = q.to_dict()
+            rec["service_score"] = ss.to_dict()
+            rec["capability"] = scoring_mod.capability_tags(ss)
+            scoring_mod.record_score_history(rec, q.overall, ts=now)
+            lc.upsert(n.get("node_id"), rec)
+        lc.save()
+        print(_json.dumps({"scored": len(pool)}, ensure_ascii=False))
+        return 0
+    if action == "cleanup":
+        res = sched_mod.enforce_size_limit(cfg)
+        print(_json.dumps(res, ensure_ascii=False))
+        return 0
+    if action == "tick":
+        def _refresh():
+            pipeline.run_refresh(cfg)
+
+        def _probe():
+            with sched_mod.Lock(cfg, "probe"):
+                pool = poolstore.read_current_final(cfg)
+                node_ids = [n.get("node_id") for n in pool] if pool else []
+                probe_services.run_service_probe(cfg, node_ids=node_ids)
+
+        def _score():
+            cmd_scheduler(cfg, "score")
+
+        def _cleanup():
+            cmd_scheduler(cfg, "cleanup")
+
+        ran = sched_mod.tick(cfg, {"refresh": _refresh, "probe": _probe,
+                                   "score": _score, "cleanup": _cleanup})
+        print(_json.dumps(ran, ensure_ascii=False))
+        return 0
+    print("usage: python3 main.py scheduler status|tick|probe|score|cleanup|recover")
+    return 2
+
+
+def cmd_backup(cfg):
+    """V0.3 Phase 7（§34）：备份 config/history/score/source 快照。"""
+    import json as _json
+    import scheduler as sched_mod
+    base = sched_mod.backup(cfg)
+    print(_json.dumps({"backup_dir": base}, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="chatgpt-pool")
     ap.add_argument("--base", help="覆盖生产目录")
     ap.add_argument("--test", action="store_true", help="测试模式（目录/端口全部隔离）")
-    ap.add_argument("cmd", choices=["init", "refresh", "serve", "run", "check", "mihomo"])
+    ap.add_argument("cmd", choices=["init", "refresh", "serve", "run", "check",
+                                    "mihomo", "scheduler", "backup"])
     ap.add_argument("--mihomo", action="store_true", help="run 时同时启动生产 Mihomo")
     ap.add_argument("mihomo_action", nargs="?",
-                    choices=["start", "stop", "restart", "status", "reload"],
-                    help="mihomo 子命令：start/stop/restart/status/reload")
+                    choices=["start", "stop", "restart", "status", "reload",
+                             "tick", "probe", "score", "cleanup", "recover"],
+                    help="mihomo 子命令；scheduler 子命令 status/tick/probe/score/cleanup/recover")
     args = ap.parse_args(argv)
 
     if args.test:
@@ -221,6 +303,13 @@ def main(argv=None):
             print("usage: python3 main.py mihomo start|stop|restart|status|reload")
             return 2
         return cmd_mihomo(cfg, args.mihomo_action)
+    elif args.cmd == "scheduler":
+        if not args.mihomo_action:
+            print("usage: python3 main.py scheduler status|tick|probe|score|cleanup|recover")
+            return 2
+        return cmd_scheduler(cfg, args.mihomo_action)
+    elif args.cmd == "backup":
+        return cmd_backup(cfg)
     return 0
 
 
