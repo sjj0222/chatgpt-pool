@@ -18,6 +18,9 @@ def ensure_dirs(cfg):
     for name in ("raw", "normalized", "results", "final", "logs", "run",
                  "state"):
         os.makedirs(cfg.sub(name), exist_ok=True)
+    # V0.2.2.1：诊断产物统一目录 run/（run/final、run/failed/nodes）
+    os.makedirs(cfg.sub("run/final"), exist_ok=True)
+    os.makedirs(cfg.sub("run/failed/nodes"), exist_ok=True)
 
 
 def write_raw(cfg, round_id, items):
@@ -51,11 +54,11 @@ def write_results(cfg, round_id, nodes):
 
 
 def write_failed_round(cfg, round_id, summary):
-    """失败轮次写入 final/failed/{round_id}.json（V0.2.1 P0-02）。
+    """失败轮次写入 run/failed/{round_id}.json（V0.2.1 P0-02 / V0.2.2.1 路径）。
 
-    仅失败轮次落 failed/，绝不覆盖 final/current.json（当前有效池）。
+    仅失败轮次落 failed/，绝不覆盖 run/final/current.json（当前有效池）。
     """
-    path = cfg.sub(f"final/failed/{round_id}.json")
+    path = cfg.sub(f"run/failed/{round_id}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -63,7 +66,8 @@ def write_failed_round(cfg, round_id, summary):
 
 
 def write_failed_nodes(cfg, round_id, nodes, limit=1000):
-    """失败节点明细写入 final/failed/nodes/{round_id}.jsonl（V0.2.2 P0-02）。
+    """失败节点明细写入 run/failed/nodes/{round_id}.jsonl（V0.2.2 P0-02 /
+    V0.2.2.1 路径）。
 
     每行一个 JSON：node_id/protocol/server/port/source/stage/failure_reason/
     failure_stage/failure_detail/sub_reason。
@@ -73,7 +77,7 @@ def write_failed_nodes(cfg, round_id, nodes, limit=1000):
     recent = rejected[-limit:]
     if not recent:
         return None
-    path = cfg.sub(f"final/failed/nodes/{round_id}.jsonl")
+    path = cfg.sub(f"run/failed/nodes/{round_id}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for n in recent:
@@ -95,8 +99,8 @@ def write_failed_nodes(cfg, round_id, nodes, limit=1000):
 
 
 def write_refresh_state(cfg, state):
-    """写入 state/refresh_state.json（V0.2.2 P1-02，供 status 读取）。"""
-    path = cfg.sub("state/refresh_state.json")
+    """写入 run/refresh_state.json（V0.2.2 P1-02 / V0.2.2.1 路径，供 status 读取）。"""
+    path = cfg.sub("run/refresh_state.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -106,8 +110,8 @@ def write_refresh_state(cfg, state):
 
 
 def read_refresh_state(cfg):
-    """读取最近刷新状态（无则返回 {}）。"""
-    p = cfg.sub("state/refresh_state.json")
+    """读取最近刷新状态 run/refresh_state.json（无则返回 {}）。"""
+    p = cfg.sub("run/refresh_state.json")
     if not os.path.isfile(p):
         return {}
     try:
@@ -118,27 +122,28 @@ def read_refresh_state(cfg):
 
 
 def write_current_final(cfg, round_id, nodes):
-    """成功发布后更新 final/current.json（原子 tmp→replace，P0-02）。
+    """成功发布后更新 run/final/current.json（原子 tmp→replace，P0-02 /
+    V0.2.2.1 路径）。
 
     结构：{"round_id": ..., "published_at": ..., "nodes": [node_dict, ...]}
     只允许 final_nodes > 0 且全部验证通过后调用（P0-02 / P1-05 / P1-13）。
     """
-    os.makedirs(cfg.sub("final"), exist_ok=True)
+    os.makedirs(cfg.sub("run/final"), exist_ok=True)
     payload = {
         "round_id": round_id,
         "published_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "nodes": [n.to_dict() if hasattr(n, "to_dict") else n for n in nodes],
     }
-    tmp = cfg.sub("final/current.json.tmp")
+    tmp = cfg.sub("run/final/current.json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, cfg.sub("final/current.json"))
-    return cfg.sub("final/current.json")
+    os.replace(tmp, cfg.sub("run/final/current.json"))
+    return cfg.sub("run/final/current.json")
 
 
 def read_current_final(cfg):
-    """读取当前有效最终池（无则返回 None）。"""
-    p = cfg.sub("final/current.json")
+    """读取当前有效最终池 run/final/current.json（无则返回 None）。"""
+    p = cfg.sub("run/final/current.json")
     if not os.path.isfile(p):
         return None
     try:
@@ -166,7 +171,7 @@ def read_pool_text(cfg):
 
 
 def read_latest_final(cfg):
-    """读取 final/current.json 的节点列表（无则返回 []，V0.2.1 P0-02）。"""
+    """读取 run/final/current.json 的节点列表（无则返回 []，V0.2.1 P0-02 / V0.2.2.1）。"""
     cur = read_current_final(cfg)
     return cur["nodes"] if cur else []
 

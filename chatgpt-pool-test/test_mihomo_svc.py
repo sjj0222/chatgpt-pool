@@ -55,9 +55,9 @@ class FakeResp:
 
 
 def _write_final(cfg, nodes):
-    """V0.2.1 P0-02：写入 final/current.json（{"round_id","nodes"}）。"""
-    os.makedirs(cfg.sub("final"), exist_ok=True)
-    path = cfg.sub("final/current.json")
+    """V0.2.1 P0-02 / V0.2.2.1：写入 run/final/current.json（{"round_id","nodes"}）。"""
+    os.makedirs(cfg.sub("run/final"), exist_ok=True)
+    path = cfg.sub("run/final/current.json")
     payload = {"round_id": "20261005000000", "nodes": nodes}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -135,7 +135,7 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         self.assertEqual(FakePopen.instances, [])  # 未重复启动
 
     def test_start_no_active_pool(self):
-        # V0.2.1 P0-03：无 final/current.json → NO_ACTIVE_POOL，绝不启动空池
+        # V0.2.1 P0-03：无 run/final/current.json → NO_ACTIVE_POOL，绝不启动空池
         summary = self.svc.start()
         self.assertFalse(summary["started"])
         self.assertEqual(summary["reason"], "NO_ACTIVE_POOL")

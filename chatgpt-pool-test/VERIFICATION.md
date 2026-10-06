@@ -94,3 +94,32 @@
 4. pipeline：`(str, Enum)` 的 str() 返回 `SubReason.TLS_TIMEOUT` 而非值 →
    stage 派生改用 `.value` 比较；chatgpt 检测内传输层失败（TCP_*/TLS_*）阶段
    归 TLS（贴合 V0.2.2 示例 TLS_TIMEOUT→TLS），业务性失败归 CHATGPT。
+
+## 9. V0.2.2.1 Diagnostic Fix 验证
+
+修复 Termux 真机验收问题：诊断产物路径统一 run/ + test_termux.sh shell 兼容。
+核心逻辑（准入/淘汰/评分/顶层 failure_reason/pipeline/空池保护/mihomo 启停）
+未改动。
+
+| 项 | 结果 |
+|---|---|
+| 单元/Mock 全量 | ✅ 109/109 全绿（V0.2.2 基线保持；refresh_state 断言强化 round_id/status/pool_size；detect.log 断言强化轮次摘要五要素） |
+| bash -n test_termux.sh | ✅ 无输出、exit 0（原 `*"started":\ true*` 非法 glob → 单引号 `*'"started": true'*`） |
+| check_file 验收 | ✅ 新增 check_file run/source_health.json / run/detect.log / run/refresh_state.json（PASS/FAIL 文案） |
+| CLI 真实冒烟（沙箱，真实 4 源 300 节点） | ✅ run/failed/nodes/{round}.jsonl 300 行、run/source_health.json、run/detect.log（含 round=/Detection Result/Stage/Reason/Protocol 摘要块）、run/refresh_state.json（round_id/status/published/pool_size）全部落盘；EMPTY_POOL 不生成 current.json 与 chatgpt.yaml（空池保护不变） |
+| 路径迁移范围 | ✅ poolstore（current/failed/nodes/refresh_state）、pipeline（source_health + detect 摘要）、main（detect handler→run/）；测试断言同步迁移，无旧路径残留 |
+
+## 10. V0.2.2.1 修复记录
+
+1. detect.log 摘要：V0.2.2 只有逐节点 START/END 事件 → V0.2.2.1 在 _finish /
+   _finish_failed 追加轮次摘要（round_id / Detection Result / Stage / Reason /
+   Protocol），满足 P0-01"detect.log 至少包含五项"。
+2. refresh_state：补齐 round_id / status 字段（满足 P0-01 四字段要求），
+   保留 last_refresh/last_success/last_failure_reason 供 status 读取。
+3. main._setup_logging：为 run/detect.log 预建 run/ 目录（mihomo 子命令
+   不经 ensure_dirs 也能落日志）。
+4. 测试断言：`assertFalse(os.path.isdir(run/failed))` 改为断言
+   run/failed 无 .json 摘要且 run/failed/nodes 为空（ensure_dirs 预建目录，
+   目录存在不代表写入失败轮次）。
+5. run_tests 新增/强化断言（refresh_state 四字段、detect.log 五要素），
+   总测试数维持 109 全绿。

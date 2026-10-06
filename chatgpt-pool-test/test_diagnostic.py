@@ -303,7 +303,7 @@ class TestSourceHealth(unittest.TestCase):
         nodes = [Node(node_id=f"n{i}", source=SOURCE_A) for i in range(3)] + \
                 [Node(node_id="n3", source=SOURCE_B)]
         final_nodes = [nodes[0]]
-        sh_path = cfg.sub("state/source_health.json")
+        sh_path = cfg.sub("run/source_health.json")
         from source_health import SourceHealth
         sh = SourceHealth(sh_path)
         data = sh.update_round(
@@ -340,13 +340,13 @@ class TestDetectLog(unittest.TestCase):
 
     def test_detect_log_records_stages(self):
         cfg = make_cfg("d_detect")
-        os.makedirs(cfg.sub("logs"), exist_ok=True)
+        os.makedirs(cfg.sub("run"), exist_ok=True)
         dt = logging.getLogger("pool.detect")
         for h in list(dt.handlers):
             dt.removeHandler(h)
         dt.setLevel(logging.INFO)
         dt.propagate = False
-        log_path = cfg.sub("logs/detect.log")
+        log_path = cfg.sub("run/detect.log")
         dt.addHandler(logging.FileHandler(log_path, encoding="utf-8"))
 
         def probe(url):
@@ -364,6 +364,12 @@ class TestDetectLog(unittest.TestCase):
         self.assertIn("EGRESS END OK", text)
         self.assertIn("CHATGPT START", text)
         self.assertIn("CHATGPT END FAIL", text)
+        # V0.2.2.1：detect.log 必须含轮次摘要（round_id/Detection Result/Stage/Reason/Protocol）
+        self.assertIn("round=", text)
+        self.assertIn("Detection Result:", text)
+        self.assertIn("Stage:", text)
+        self.assertIn("Reason:", text)
+        self.assertIn("Protocol:", text)
 
 
 class TestPipelineDiagnosticFields(unittest.TestCase):
@@ -442,6 +448,10 @@ class TestRefreshState(unittest.TestCase):
         self.assertTrue(st["published"])
         self.assertEqual(st["last_success"], st["last_round_id"])
         self.assertEqual(st["last_failure_reason"], "")
+        # V0.2.2.1：refresh_state 至少含 round_id/status/published/pool_size
+        self.assertTrue(st["round_id"])
+        self.assertEqual(st["status"], "published")
+        self.assertGreater(st["pool_size"], 0)
 
     def test_failure_writes_state(self):
         cfg = make_cfg("d_rs_fail")
@@ -451,6 +461,10 @@ class TestRefreshState(unittest.TestCase):
         st = poolstore.read_refresh_state(cfg)
         self.assertFalse(st["published"])
         self.assertEqual(st["last_failure_reason"], "EMPTY_POOL")
+        # V0.2.2.1：失败轮次 status=原因、round_id 落盘
+        self.assertEqual(st["status"], "EMPTY_POOL")
+        self.assertTrue(st["round_id"])
+        self.assertEqual(st["pool_size"], 0)
 
 
 if __name__ == "__main__":

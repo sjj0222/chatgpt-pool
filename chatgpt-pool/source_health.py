@@ -1,6 +1,6 @@
 """数据源健康统计（V0.2.2 P0-05）。
 
-state/source_health.json：
+run/source_health.json：
   {
     "source_url": {
       "fetch": true, "parsed": 300, "valid": 280,
@@ -27,7 +27,7 @@ log = logging.getLogger("pool.source_health")
 
 
 class SourceHealth:
-    """state/source_health.json 的读写与每轮更新。"""
+    """run/source_health.json 的读写与每轮更新。"""
 
     def __init__(self, path):
         self.path = path

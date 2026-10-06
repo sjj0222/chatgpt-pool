@@ -34,15 +34,15 @@
 ├── source_health.py       数据源健康统计（V0.2.2 P0-05）
 ├── supported_countries.json   国家列表本地缓存（自动生成）
 ├── raw/ normalized/ results/ state/ logs/ run/   运行数据（§24）
-├── final/current.json     当前有效最终池（成功发布原子替换，V0.2.1 P0-02）
-├── final/failed/          失败轮次诊断（绝不覆盖 current.json）
-├── final/failed/nodes/    失败节点明细 jsonl（V0.2.2 P0-02，≤1000）
-├── state/node_history.json    节点跨轮历史（P1-02）
-├── state/source_health.json   数据源健康（V0.2.2 P0-05）
-├── state/refresh_state.json   最近刷新状态（V0.2.2 P1-02）
-├── logs/reject.log        REJECTED 明细（P1-04，与 pool.log/mihomo.log 分离）
-├── logs/detect.log        分阶段检测日志（V0.2.2 P0-03）
-└── chatgpt.yaml           最终订阅（原子替换产生）
+├── run/final/current.json  当前有效最终池（成功发布原子替换；V0.2.1 P0-02 / V0.2.2.1 路径）
+├── run/failed/             失败轮次诊断（绝不覆盖 current.json）
+├── run/failed/nodes/       失败节点明细 jsonl（V0.2.2 P0-02，≤1000）
+├── run/source_health.json  数据源健康（V0.2.2 P0-05 / V0.2.2.1 路径）
+├── run/detect.log          分阶段检测日志 + 轮次摘要（V0.2.2 P0-03 / V0.2.2.1）
+├── run/refresh_state.json  最近刷新状态（V0.2.2 P1-02 / V0.2.2.1 路径）
+├── state/node_history.json 节点跨轮历史（P1-02）
+├── logs/reject.log         REJECTED 明细（P1-04，与 pool.log/mihomo.log 分离）
+└── chatgpt.yaml            最终订阅（原子替换产生）
 ```
 
 测试目录 `~/chatgpt-pool-test/`：端口 18887 + 19000-19999，与生产完全隔离。
@@ -123,7 +123,40 @@ bash test_termux.sh
 - **P1-03 refresh 输出**：refresh 先打印
   `Detection Result（Total/Failed/Stage/Reason/Protocol）`，再输出完整 JSON。
 - **新增统计字段**：`reject_summary_detailed`（细分原因计数）、`stage_summary`
-  （阶段计数）、`failed_node_count`；`state/refresh_state.json` 记录最近刷新状态。
+  （阶段计数）、`failed_node_count`；`run/refresh_state.json` 记录最近刷新状态。
+
+## V0.2.2.1 Diagnostic Fix
+
+修复 Termux 真机验收发现的问题（路径统一 + 测试脚本兼容），**不改变
+V0.2.2 核心诊断能力**，节点准入/淘汰/评分/顶层 failure_reason/pipeline/空池保护
+/mihomo 启停逻辑全部不变。
+
+- **P0-01 诊断产物路径统一**：诊断产物全部固定到 `run/` 树：
+
+  ```
+  run/
+  ├── final/
+  │   └── current.json      当前有效最终池（成功发布原子替换）
+  ├── failed/
+  │   ├── {round_id}.json   失败轮次摘要（绝不覆盖 current.json）
+  │   └── nodes/
+  │       └── {round_id}.jsonl  失败节点明细（≤1000）
+  ├── source_health.json    数据源健康（格式保持 V0.2.2）
+  ├── detect.log            分阶段检测日志 + 轮次摘要
+  └── refresh_state.json    最近刷新状态
+  ```
+
+  `detect.log` 除逐节点阶段事件外，每轮追加摘要块（含 `round=`、
+  `Detection Result`、`Stage`、`Reason`、`Protocol`）。
+  `refresh_state.json` 至少含 `{"round_id","status","published","pool_size"}`
+  （同时保留 last_refresh/last_success/last_failure_reason 供 status 读取）。
+- **P0-02 test_termux.sh 修复**：case 匹配改为单引号包裹
+  （`*'"started": true'*`），消除非法 glob（原
+  `*"started":\ true*` 触发 `syntax error near unexpected token 'true*'`）；
+  `bash -n test_termux.sh` 无输出且 exit 0。
+- **P0-03 验收检查**：新增 `check_file`，验收 `run/source_health.json`、
+  `run/detect.log`、`run/refresh_state.json`（`[PASS] xxx exists` /
+  `[FAIL] xxx missing`）；目录隔离检查同步指向 `run/`。
 
 ## 生产 Mihomo 常驻（P1-08 细化）
 

@@ -1,6 +1,6 @@
 """V0.2.1 production hardening 测试（P0-01..P0-05 + P1-01..P1-04 核心）。
 
-覆盖：reject_summary 真实统计、final/current.json 隔离、start 空池保护与双端口
+覆盖：reject_summary 真实统计、run/final/current.json 隔离、start 空池保护与双端口
 就绪、status 增强（active_pool/ports/version）、refresh 失败恢复、节点历史/
 健康度/评分、reject.log。全部 Mock：不启动真实进程、不触碰生产目录。
 """
@@ -110,18 +110,21 @@ class TestFinalIsolation(unittest.TestCase):
         with LocalMockSite(strict_success_routes()) as site:
             s = pipeline.run_refresh(cfg, inject=_inject(site))
         self.assertTrue(s["published"])
-        with open(cfg.sub("final/current.json")) as f:
+        with open(cfg.sub("run/final/current.json")) as f:
             cur = json.load(f)
         self.assertEqual(cur["round_id"], s["round_id"])
         self.assertEqual(len(cur["nodes"]), 2)
-        self.assertFalse(os.path.isdir(cfg.sub("final/failed")))
+        # 成功轮次不落 failed/（目录为 ensure_dirs 预建，断言无摘要文件与明细）
+        self.assertEqual([f for f in os.listdir(cfg.sub("run/failed"))
+                          if f.endswith(".json")], [])
+        self.assertEqual(os.listdir(cfg.sub("run/failed/nodes")), [])
 
     def test_failed_round_isolated_keeps_current(self):
         cfg = make_cfg("h_cur_keep")
         with LocalMockSite(strict_success_routes()) as site:
             ok = pipeline.run_refresh(cfg, inject=_inject(site))
         self.assertTrue(ok["published"])
-        cur_before = open(cfg.sub("final/current.json")).read()
+        cur_before = open(cfg.sub("run/final/current.json")).read()
         pool_before = open(cfg.pool_path).read()
 
         with LocalMockSite(strict_success_routes()) as site:
@@ -129,9 +132,9 @@ class TestFinalIsolation(unittest.TestCase):
         self.assertFalse(bad["published"])
         self.assertEqual(bad["reason"], "EMPTY_POOL")
         # 失败轮次落 failed/，current.json 与 chatgpt.yaml 原样保留
-        failed_path = cfg.sub(f"final/failed/{bad['round_id']}.json")
+        failed_path = cfg.sub(f"run/failed/{bad['round_id']}.json")
         self.assertTrue(os.path.isfile(failed_path))
-        self.assertEqual(open(cfg.sub("final/current.json")).read(), cur_before)
+        self.assertEqual(open(cfg.sub("run/final/current.json")).read(), cur_before)
         self.assertEqual(open(cfg.pool_path).read(), pool_before)
 
     def test_system_fail_writes_failed_round(self):
@@ -139,7 +142,7 @@ class TestFinalIsolation(unittest.TestCase):
         with LocalMockSite(strict_success_routes()) as site:
             ok = pipeline.run_refresh(cfg, inject=_inject(site))
         self.assertTrue(ok["published"])
-        cur_before = open(cfg.sub("final/current.json")).read()
+        cur_before = open(cfg.sub("run/final/current.json")).read()
         bad = pipeline.run_refresh(cfg, inject={
             "fetchers": lambda: [("mock", SOURCE)],
             "country_resolver": fake_country_resolver(
@@ -151,14 +154,14 @@ class TestFinalIsolation(unittest.TestCase):
         })
         self.assertEqual(bad["reason"], "COUNTRY_LIST_UNAVAILABLE")
         self.assertTrue(os.path.isfile(
-            cfg.sub(f"final/failed/{bad['round_id']}.json")))
-        self.assertEqual(open(cfg.sub("final/current.json")).read(), cur_before)
+            cfg.sub(f"run/failed/{bad['round_id']}.json")))
+        self.assertEqual(open(cfg.sub("run/final/current.json")).read(), cur_before)
 
     def test_failed_round_contains_reject_summary(self):
         cfg = make_cfg("h_fail_diag")
         with LocalMockSite(strict_success_routes()) as site:
             bad = pipeline.run_refresh(cfg, inject=_inject(site, engine_ok=False))
-        with open(cfg.sub(f"final/failed/{bad['round_id']}.json")) as f:
+        with open(cfg.sub(f"run/failed/{bad['round_id']}.json")) as f:
             diag = json.load(f)
         self.assertEqual(diag["reason"], "EMPTY_POOL")
         self.assertEqual(diag["reject_summary"], {"PROXY_START_FAIL": 2})
@@ -182,10 +185,10 @@ class TestStartProtection(unittest.TestCase):
         self.cfg.mihomo_start_timeout = 0.4
         self.svc = mihomo_svc.ProductionMihomo(self.cfg)
         os.makedirs(self.svc.rundir, exist_ok=True)
-        os.makedirs(self.cfg.sub("final"), exist_ok=True)
+        os.makedirs(self.cfg.sub("run/final"), exist_ok=True)
 
     def test_start_empty_active_pool(self):
-        with open(self.cfg.sub("final/current.json"), "w",
+        with open(self.cfg.sub("run/final/current.json"), "w",
                   encoding="utf-8") as f:
             json.dump({"round_id": "x", "nodes": []}, f)
         summary = self.svc.start()
@@ -193,7 +196,7 @@ class TestStartProtection(unittest.TestCase):
         self.assertEqual(summary["reason"], "NO_ACTIVE_POOL")
 
     def test_start_requires_both_ports(self):
-        with open(self.cfg.sub("final/current.json"), "w",
+        with open(self.cfg.sub("run/final/current.json"), "w",
                   encoding="utf-8") as f:
             json.dump(_current_payload(), f)
 
@@ -239,10 +242,10 @@ class TestStatusEnhanced(unittest.TestCase):
         self.cfg = make_cfg("h_status")
         self.svc = mihomo_svc.ProductionMihomo(self.cfg)
         os.makedirs(self.svc.rundir, exist_ok=True)
-        os.makedirs(self.cfg.sub("final"), exist_ok=True)
+        os.makedirs(self.cfg.sub("run/final"), exist_ok=True)
 
     def test_status_active_pool_ports_version(self):
-        with open(self.cfg.sub("final/current.json"), "w",
+        with open(self.cfg.sub("run/final/current.json"), "w",
                   encoding="utf-8") as f:
             json.dump(_current_payload(round_id="20261006120000"), f)
         with open(self.svc.pid_path, "w", encoding="utf-8") as f:

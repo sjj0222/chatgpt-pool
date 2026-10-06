@@ -150,7 +150,7 @@ class ProductionMihomo:
     def start(self, nodes=None):
         """启动常驻实例（V0.2.1 P0-03 安全检查）；已在运行则幂等。
 
-        检查 1：当前池存在（final/current.json，否则 NO_ACTIVE_POOL）。
+        检查 1：当前池存在（run/final/current.json，否则 NO_ACTIVE_POOL）。
         检查 2：节点数量 > 0。
         检查 3：配置生成成功（run/prod/config.yaml）。
         检查 4：代理 7890 与 API 9090 双端口就绪后才返回 started。

@@ -34,6 +34,7 @@ import yaml_lite
 
 def _setup_logging(cfg):
     os.makedirs(cfg.sub("logs"), exist_ok=True)
+    os.makedirs(cfg.sub("run"), exist_ok=True)  # V0.2.2.1：run/detect.log 父目录
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logging.basicConfig(
         level=logging.INFO, format=fmt,
@@ -47,12 +48,12 @@ def _setup_logging(cfg):
     rj.propagate = False
     rj.addHandler(logging.FileHandler(
         cfg.sub("logs/reject.log"), encoding="utf-8"))
-    # V0.2.2 P0-03：分阶段检测日志 logs/detect.log
+    # V0.2.2 P0-03 / V0.2.2.1：分阶段检测日志 run/detect.log
     dt = logging.getLogger("pool.detect")
     dt.setLevel(logging.INFO)
     dt.propagate = False
     dt.addHandler(logging.FileHandler(
-        cfg.sub("logs/detect.log"), encoding="utf-8"))
+        cfg.sub("run/detect.log"), encoding="utf-8"))
 
 
 def _print_detection_result(summary):
