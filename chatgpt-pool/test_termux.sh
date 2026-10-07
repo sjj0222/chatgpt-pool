@@ -49,10 +49,21 @@ if ls run/failed/ >/dev/null 2>&1; then
 else
     echo "  （本轮无失败轮次）"
 fi
-echo "-- 诊断产物检查（V0.2.2.1 P0-03）--"
+echo "-- 诊断产物检查（V0.2.2.1 P0-03 / V0.4.3 P1）--"
 check_file run/source_health.json
 check_file run/detect.log
 check_file run/refresh_state.json
+# V0.4.3：failed/{round}.json 与 failed/nodes/{round}.jsonl 也必须存在
+if ls run/failed/*.json >/dev/null 2>&1; then
+    ok "failed snapshot exists"
+else
+    bad "failed snapshot missing"
+fi
+if ls run/failed/nodes/*.jsonl >/dev/null 2>&1; then
+    ok "nodes snapshot exists"
+else
+    bad "nodes snapshot missing"
+fi
 echo "-- chatgpt.yaml --"
 [ -f chatgpt.yaml ] && echo "  chatgpt.yaml 存在（订阅已交付）" \
                     || echo "  无 chatgpt.yaml（首次运行失败不生成空 YAML，符合 §29）"

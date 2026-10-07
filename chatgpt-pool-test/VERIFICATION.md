@@ -232,3 +232,16 @@ V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）
 | P3 health_check 必生成 runtime_report.json 七字段 | ✅ |
 | P4 POST /api/refresh|start|stop dispatch 不 404 | ✅ |
 | 测试 | ✅ 326/326（V0.4.1 311 + 新增 15） |
+
+## V0.4.3 Diagnostic Persistence Final Fix
+
+| 验收项 | 结果 |
+|---|---|
+| P0 统一失败出口 _finalize_refresh_failure | ✅ |
+| P1 五类诊断文件必落盘（失败/异常/提前 return） | ✅ |
+| P3 全局异常保护：RuntimeError 也写诊断再抛出 | ✅ |
+| ENVIRONMENT_ANOMALY 五文件齐全 | ✅ |
+| BOOTSTRAP_FAILED 五文件齐全 + 不生成空 yaml | ✅ |
+| EMPTY_POOL 五文件齐全 + 不生成空 yaml | ✅ |
+| test_termux.sh 加 failed/nodes snapshot 检查 | ✅ bash -n 通过 |
+| 测试 | ✅ 331/331（V0.4.2 326 + 新增 5） |

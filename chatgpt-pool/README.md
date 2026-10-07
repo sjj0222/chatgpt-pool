@@ -397,3 +397,18 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
   含 uptime/pool_size/active_nodes/success_rate/average_score/
   source_health/error_count。
 - **P4 API**：test_termux.sh 补 POST /api/refresh|start|stop 验收。
+
+## V0.4.3 Diagnostic Persistence Final Fix
+
+基于 V0.4.2（e095940）。只修"失败→诊断→落盘"闭环，不加新功能：
+
+- **P0 统一失败出口**：`_finalize_refresh_failure`（= `_finish_failed`）
+  覆盖 COUNTRY_LIST_UNAVAILABLE / INTERNAL_ERROR / EMPTY_POOL /
+  ENVIRONMENT_ANOMALY / ALL_NODE_FAILED / BOOTSTRAP_FAILED 六条路径。
+- **P1 五类诊断文件必落盘**：source_health.json / detect.log /
+  refresh_state.json / failed/{round}.json / failed/nodes/{round}.jsonl——
+  任何 refresh 结果（成功/失败/异常/提前 return）都具备。
+- **P3 全局异常保护**：run_refresh 入口 try/except——即使中间步骤抛
+  RuntimeError，也先写诊断文件再 re-raise，绝不裸奔退出。
+- **test_termux.sh**：refresh 后新增 failed snapshot / nodes snapshot 检查，
+  任一缺失直接 FAIL。

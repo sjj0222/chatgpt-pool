@@ -471,6 +471,22 @@ def run_refresh(cfg, inject=None):
                "reject_summary_detailed": {}, "reject_summary_by_protocol": {},
                "stage_summary": {}, "failed_node_count": 0}
     history = history_mod.NodeHistory(cfg.sub("state/node_history.json"))
+    try:
+        return _run_refresh_inner(cfg, inject, round_id, summary, history)
+    except Exception as e:
+        # V0.4.3 P3：全局异常保护——即使程序异常退出，也必须留下诊断文件，
+        # 然后再把异常抛给调用方。
+        log.exception("refresh crashed: %s", e)
+        summary["reason"] = f"INTERNAL_ERROR: {e}"
+        try:
+            _finish_failed(cfg, round_id, summary, history)
+        except Exception:
+            log.exception("diagnostic finalize also failed")
+        raise
+
+
+def _run_refresh_inner(cfg, inject, round_id, summary, history):
+    """run_refresh 主体（V0.4.3：被顶层 try/except 包裹做诊断兜底）。"""
 
     # 1) 获取节点（§26 第一步）；注入的 fetchers 可以是列表或工厂函数
     raw_fetchers = inject.get("fetchers")
@@ -632,8 +648,10 @@ def _write_detect_summary(cfg, summary):
 
 def _finish_failed(cfg, round_id, summary, history,
                    raw_items=None, parsed_nodes=None, nodes=None):
-    """V0.2.2.2：失败路径（系统级失败/全部源失败）也必须持久化全部诊断产物。
+    """V0.2.2.2 / V0.4.3：统一失败出口（_finalize_refresh_failure 同名）。
 
+    所有失败路径必须经过这里，绝不允许 return 失败而不写诊断。
+    必产出（五类诊断文件）：
     - run/failed/{round_id}.json（摘要）
     - run/failed/nodes/{round_id}.jsonl（无节点也生成空文件）
     - run/source_health.json（提前 return 路径未收集则兜底：fetch/parsed 真实、
@@ -654,6 +672,10 @@ def _finish_failed(cfg, round_id, summary, history,
     _write_refresh_state(cfg, summary)
     history.save()
     return summary
+
+
+# V0.4.3 P0：统一失败出口（语义同 _finish_failed；所有失败路径必须调用）
+_finalize_refresh_failure = _finish_failed
 
 
 def _finish(cfg, round_id, summary, history):
