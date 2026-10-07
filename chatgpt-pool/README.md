@@ -357,3 +357,25 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
 - **0.4-6 数据安全**：Local First；export/import config（白名单字段、
   config_import.json 落盘）；自动备份（scheduler backup 12h）；
   快照回滚（V0.3 Phase 8）可恢复。
+
+## V0.4.1 Production Verification（只验证，不加核心能力）
+
+基于 V0.4（69ef215）。不改评分公式/状态机/排序/准入/Source 管理规则，
+只增加验证、统计、报告：
+
+- **Phase 2 Runtime Stability Monitor**：`run/runtime_report.json` 扩展
+  `start_time` / `average_score` / `source_count` 字段；health_check 周期
+  1h（每小时更新）；历史归档 `run/history/runtime/*.json` 保留最近 168 条
+  （≈7 天每小时），不覆盖历史；异常不中断主流程。
+- **Phase 3 Service Quality**：`run/service_quality.json` 累积各服务
+  （chatgpt/github/claude/gemini/web）成功率 / 平均延迟 / 失败原因计数；
+  `service_quality.record(cfg, service, ok, latency_ms, fail_reason)` 写入。
+- **Phase 5 Source Quality Report**：`run/source_quality_report.json` 只读
+  聚合 source_health + source_lifecycle；连续 7 轮 alive_rate<5% 标
+  `LOW_QUALITY`、DISABLED 且无贡献标 `EXPIRED`（仅报告标记，不改 lifecycle）。
+- **Phase 4/8 验证测试**：生命周期端到端（ACTIVE→DEGRADED→COOLDOWN
+  10min→恢复 ACTIVE 信用不丢；BLACKLIST 不可恢复）+ 故障模拟（mihomo
+  异常跳过不中断 / 源失效降级 / current.json 删除快照回滚 / 重启陈旧锁清理）。
+
+待用户真机执行：Termux `bash test_termux.sh`、APK 安装与五页/操作验收、
+7 天连续运行（ACTIVE 20~30、无人工重启、无空池覆盖）。

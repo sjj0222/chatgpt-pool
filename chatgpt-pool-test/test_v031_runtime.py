@@ -65,11 +65,12 @@ class TestRuntimeReport(unittest.TestCase):
         lc.save()
         report = runtime_monitor.build_runtime_report(cfg, uptime_s=600)
         for k in ("uptime_s", "pool_size", "active_nodes", "success_rate",
-                  "score_average", "source_health", "error_count"):
+                  "average_score", "source_count", "source_health",
+                  "error_count"):
             self.assertIn(k, report)
         self.assertEqual(report["pool_size"], 1)
         self.assertEqual(report["active_nodes"], 1)
-        self.assertEqual(report["score_average"], 82.0)
+        self.assertEqual(report["average_score"], 82.0)
         self.assertGreaterEqual(report["success_rate"], 0.5)
 
     def test_write_runtime_report(self):
@@ -85,7 +86,7 @@ class TestSchedulerV031(unittest.TestCase):
     def test_new_tasks_in_schedule(self):
         self.assertIn("health_check", scheduler.SCHEDULE)
         self.assertIn("backup", scheduler.SCHEDULE)
-        self.assertEqual(scheduler.SCHEDULE["health_check"], 10 * 60)
+        self.assertEqual(scheduler.SCHEDULE["health_check"], 3600)
         self.assertEqual(scheduler.SCHEDULE["backup"], 12 * 3600)
 
     def test_tick_uses_lock_for_refresh(self):

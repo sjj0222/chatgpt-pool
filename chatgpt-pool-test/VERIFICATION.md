@@ -205,3 +205,19 @@ V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）
 | 集成 5 类故障 | ✅ 全池死亡/源失效/Scheduler 崩溃/数据损坏/重启恢复 |
 | 脚本 | ✅ bash -n test_termux.sh（step 7 含 V0.4 API 验收） |
 | 待真机 | Termux：bash test_termux.sh + 7 天连续运行（V0.3.1 验收）；APK 本地构建（V0.4 验收） |
+
+## V0.4.1 Production Verification（代码侧）
+
+| 验收项 | 结果 |
+|---|---|
+| Phase 2 runtime_report 扩展字段（start_time/average_score/source_count） | ✅ |
+| Phase 2 历史归档 run/history/runtime/ 不覆盖（留 168） | ✅ |
+| Phase 3 service_quality.json 成功率/avg_latency/fail_reason 累积 | ✅ |
+| Phase 4 生命周期端到端（DEGRADED→COOLDOWN 10min→恢复 ACTIVE 信用不丢） | ✅ |
+| Phase 4 BLACKLIST 不可恢复 | ✅ |
+| Phase 5 source_quality_report.json（LOW_QUALITY/EXPIRED 只读标记） | ✅ |
+| Phase 8 故障模拟（mihomo 异常/源失效降级/current.json 回滚/重启恢复） | ✅ |
+| health_check 周期 3600s（每小时更新） | ✅ |
+| 测试 | ✅ 311/311（V0.4 基线 299 + 新增 12） |
+| 冒烟 | ✅ `scheduler health_check` 生成 runtime_report + source_quality_report |
+| 待真机 | APK 安装五页/操作；7 天连续运行；ACTIVE 20~30 观察 |

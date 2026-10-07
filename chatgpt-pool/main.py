@@ -237,14 +237,18 @@ def cmd_scheduler(cfg, action):
         print(_json.dumps(res, ensure_ascii=False))
         return 0
     if action == "health_check":
-        # V0.3.1（0.3.1-3/4）：资源监控 + 日志轮转 + 7 天观察报告
+        # V0.3.1（0.3.1-3/4）：资源监控 + 日志轮转 + 报告；
+        # V0.4.1：source_quality_report 一并生成（异常不中断）
         import runtime_monitor
+        import source_quality_report
         rotated = runtime_monitor.rotate_all_logs(cfg)
         report = runtime_monitor.build_runtime_report(cfg)
         runtime_monitor.write_runtime_report(cfg, report)
         stats = runtime_monitor.resource_stats(cfg)
+        sq_path = source_quality_report.write_report(cfg)
         print(_json.dumps({"resources": stats, "rotated": rotated,
-                           "report": report}, ensure_ascii=False, indent=2))
+                           "report": report, "source_quality": sq_path},
+                          ensure_ascii=False, indent=2))
         return 0
     if action == "backup":
         # V0.3.1（0.3.1-2）：自动备份任务

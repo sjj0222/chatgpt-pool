@@ -45,7 +45,7 @@ SCHEDULE = {
     "probe": 30 * 60,        # 30min
     "score": 1 * 3600,       # 1h
     "cleanup": 24 * 3600,    # 24h
-    "health_check": 10 * 60, # 10min（V0.3.1：资源监控 + runtime_report）
+    "health_check": 3600,     # 1h（V0.4.1：runtime_report 每小时更新）
     "backup": 12 * 3600,     # 12h（V0.3.1：自动备份）
 }
 # §22 探测等级

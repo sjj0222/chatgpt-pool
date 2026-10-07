@@ -103,13 +103,13 @@ def _read_json(path):
 
 
 def build_runtime_report(cfg, uptime_s=None):
-    """V0.3.1-4：生成 runtime_report.json（7 天观察数据）。"""
+    """V0.3.1-4 / V0.4.1 Phase 2：生成 runtime_report.json（持续观察数据）。"""
     pool = _read_json(cfg.sub("run/final/current.json"))
     rs = _read_json(cfg.sub("run/refresh_state.json"))
     lc = _read_json(cfg.sub("state/node_lifecycle.json")) or {}
     nodes = lc.get("nodes", {})
     sh = _read_json(cfg.sub("run/source_health.json")) or {}
-    # 成功率（最终池成功节点 / 生命周期检测总数）
+    sc = _read_json(cfg.sub("state/source_lifecycle.json")) or {}
     ok = sum(int(n.get("success_count", 0) or 0) for n in nodes.values())
     fail = sum(int(n.get("fail_count", 0) or 0) for n in nodes.values())
     success_rate = (round(ok / (ok + fail), 4) if ok + fail > 0 else 0.0)
@@ -121,11 +121,14 @@ def build_runtime_report(cfg, uptime_s=None):
     return {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "uptime_s": uptime_s if uptime_s is not None else 0,
+        "start_time": (rs or {}).get("first_start")
+                      or (rs or {}).get("last_refresh"),
         "pool_size": len(pool.get("nodes", [])) if pool else 0,
         "active_nodes": sum(1 for n in nodes.values()
                             if n.get("life_state") == "ACTIVE"),
         "success_rate": success_rate,
-        "score_average": score_avg,
+        "average_score": score_avg,
+        "source_count": len(sh) if sh else len(sc.get("sources", {})),
         "source_health": {"count": len(sh),
                           "alive_total": sum(int(v.get("alive", 0) or 0)
                                              for v in sh.values())},
@@ -136,7 +139,7 @@ def build_runtime_report(cfg, uptime_s=None):
 
 
 def write_runtime_report(cfg, report=None, uptime_s=None):
-    """写 run/runtime_report.json。"""
+    """写 run/runtime_report.json + 归档历史（不覆盖历史，Phase 2）。"""
     report = report or build_runtime_report(cfg, uptime_s=uptime_s)
     path = cfg.sub(REPORT_PATH)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -144,4 +147,17 @@ def write_runtime_report(cfg, report=None, uptime_s=None):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+    # 历史归档（保留最近 168 条 ≈ 7 天每小时）
+    hist_dir = cfg.sub("run/history/runtime")
+    os.makedirs(hist_dir, exist_ok=True)
+    name = (time.strftime("%Y%m%dT%H%M%S") + "_"
+            + ("%06d" % (time.time_ns() % 1000000)) + ".json")
+    try:
+        with open(os.path.join(hist_dir, name), "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        files = sorted(os.listdir(hist_dir))
+        for old in files[:-168]:
+            os.remove(os.path.join(hist_dir, old))
+    except OSError as e:
+        log.warning("runtime history archive failed: %s", e)
     return path
