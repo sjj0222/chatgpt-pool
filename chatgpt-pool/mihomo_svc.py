@@ -239,11 +239,18 @@ class ProductionMihomo:
 
         V0.2.2.2 生命周期增强：kill → 等待 → 确认 PID 退出 → 确认 7890/9090
         端口释放（每 1 秒检查一次，最多 5 秒）。
+        V0.4.2 P1：PID 不存在 → 直接返回 already_stopped，不因残留端口
+        检测失败（残留端口属于其他进程，§33 禁止触碰）。
         """
         pid = self._read_pid()
+        if not pid or not _proc_alive(pid):
+            # 情况 B：本来就没在跑，不做端口检测
+            self._proc = None
+            self._clear_pid()
+            return {"status": "already_stopped", "stopped": True,
+                    "pid": pid}
         proc = self._proc if (self._proc is not None
                               and self._proc.pid == pid) else None
-        pid_exited = not _proc_alive(pid)
         if pid and _proc_alive(pid):
             try:
                 os.kill(pid, signal.SIGTERM)

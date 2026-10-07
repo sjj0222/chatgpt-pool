@@ -224,18 +224,19 @@ class TestProductionMihomoStartStop(unittest.TestCase):
                           self.cfg.mihomo_api_port: True})
 
     def test_stop_pid_not_exists_reports_released(self):
-        """无 PID 文件：pid_exited=True（无进程），端口未被占用即视为释放。"""
+        """V0.4.2 P1：无 PID 文件 → already_stopped，不做端口检测。"""
         summary = self.svc.stop()
         self.assertTrue(summary["stopped"])
         self.assertIsNone(summary["pid"])
-        self.assertTrue(summary["pid_exited"])
-        self.assertTrue(all(summary["ports"].values()))
+        self.assertEqual(summary["status"], "already_stopped")
 
     def test_stop_port_release_timeout(self):
         """端口未释放：返回 ports={7890: False}，绝不 kill 其他进程。"""
         with open(self.svc.pid_path, "w", encoding="utf-8") as f:
             f.write("12345")
-        with mock.patch("mihomo_svc._proc_alive", return_value=False), \
+        with mock.patch("mihomo_svc._proc_alive",
+                        side_effect=[True, True, False, False, False, False, False, False, False, False]), \
+             mock.patch("os.kill", lambda *a: None), \
              mock.patch.object(
                  self.svc, "_wait_ports_released",
                  return_value={self.cfg.prod_mihomo_port: False,
@@ -250,7 +251,12 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         import contextlib
         import io
         _write_final(self.cfg, [_node("a")])
-        with mock.patch.object(
+        with open(self.svc.pid_path, "w", encoding="utf-8") as f:
+            f.write("12345")
+        with mock.patch("mihomo_svc._proc_alive",
+                        side_effect=[True, True, False, False, False, False, False, False, False, False]), \
+             mock.patch("os.kill", lambda *a: None), \
+             mock.patch.object(
                 mihomo_svc.ProductionMihomo, "_wait_ports_released",
                 return_value={self.cfg.prod_mihomo_port: False,
                               self.cfg.mihomo_api_port: True}):
@@ -261,7 +267,12 @@ class TestProductionMihomoStartStop(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("PORT_RELEASE_TIMEOUT port=7890", out)
         self.assertNotIn("PASS port released", out)
-        with mock.patch.object(
+        with open(self.svc.pid_path, "w", encoding="utf-8") as f:
+            f.write("12345")
+        with mock.patch("mihomo_svc._proc_alive",
+                        side_effect=[True, True, False, False, False, False, False, False, False, False]), \
+             mock.patch("os.kill", lambda *a: None), \
+             mock.patch.object(
                 mihomo_svc.ProductionMihomo, "_wait_ports_released",
                 return_value={self.cfg.prod_mihomo_port: True,
                               self.cfg.mihomo_api_port: True}):

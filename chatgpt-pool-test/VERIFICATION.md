@@ -221,3 +221,14 @@ V0.3 按 Phase 1-10 严格推进（用户每阶段确认后进入下一阶段）
 | 测试 | ✅ 311/311（V0.4 基线 299 + 新增 12） |
 | 冒烟 | ✅ `scheduler health_check` 生成 runtime_report + source_quality_report |
 | 待真机 | APK 安装五页/操作；7 天连续运行；ACTIVE 20~30 观察 |
+
+## V0.4.2 Production Fix（代码侧）
+
+| 验收项 | 结果 |
+|---|---|
+| P0 五类失败路径均生成 5 个诊断文件 | ✅ 8 个测试覆盖 |
+| P1 PID 不存在 → already_stopped 不做端口检测 | ✅ |
+| P2 test_termux.sh 零 /tmp，web log=run/web_test.log | ✅ bash -n 通过 |
+| P3 health_check 必生成 runtime_report.json 七字段 | ✅ |
+| P4 POST /api/refresh|start|stop dispatch 不 404 | ✅ |
+| 测试 | ✅ 326/326（V0.4.1 311 + 新增 15） |

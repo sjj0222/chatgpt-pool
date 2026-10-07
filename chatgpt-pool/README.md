@@ -379,3 +379,21 @@ V0.3 总目标：在不改变 V0.2.2.2 稳定诊断体系的前提下，从"节�
 
 待用户真机执行：Termux `bash test_termux.sh`、APK 安装与五页/操作验收、
 7 天连续运行（ACTIVE 20~30、无人工重启、无空池覆盖）。
+
+## V0.4.2 Production Fix（真机验收问题修复）
+
+基于 V0.4.1（d7cec61）。不改状态机/评分/Source 规则/pipeline/准入淘汰/
+空池保护/mihomo 安全启动，只修真机暴露的问题：
+
+- **P0 诊断持久化**：所有失败路径（ENVIRONMENT_ANOMALY /
+  COUNTRY_LIST_UNAVAILABLE / INTERNAL_ERROR 全源失败 / EMPTY_POOL /
+  全节点失败）都经过统一 `_finish`/`_finish_failed`，必产出
+  source_health.json / detect.log / refresh_state.json /
+  failed/{round}.json / failed/nodes/{round}.jsonl。
+- **P1 stop 生命周期**：PID 文件不存在或进程已死 → 直接返回
+  `already_stopped`，不做端口检测（残留端口属其他进程，§33 不触碰）。
+- **P2 Termux Web**：日志改 `run/web_test.log`，全脚本零 `/tmp`。
+- **P3 runtime_report**：health_check 必生成 runtime_report.json，
+  含 uptime/pool_size/active_nodes/success_rate/average_score/
+  source_health/error_count。
+- **P4 API**：test_termux.sh 补 POST /api/refresh|start|stop 验收。

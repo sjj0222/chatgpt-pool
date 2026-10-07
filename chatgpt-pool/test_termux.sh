@@ -97,7 +97,8 @@ print("端口释放复核:", "OK" if not busy else f"仍占用: {busy}")
 PY
 
 step 7 "V0.3 Web 管理页面：python3 main.py web（§36，仅 127.0.0.1）"
-python3 main.py web > /tmp/chatgpt-pool-web.log 2>&1 &
+mkdir -p run
+python3 main.py web > run/web_test.log 2>&1 &
 WEB_PID=$!
 sleep 3
 if curl -s http://127.0.0.1:18888/api/health >/dev/null 2>&1; then
@@ -118,7 +119,7 @@ if curl -s http://127.0.0.1:18888/api/health >/dev/null 2>&1; then
         bad "Diagnostic 页面渲染异常"
     fi
 else
-    bad "Dashboard 未能启动（查看 /tmp/chatgpt-pool-web.log）"
+    bad "Dashboard 未能启动（查看 run/web_test.log）"
 fi
 kill $WEB_PID 2>/dev/null
 wait $WEB_PID 2>/dev/null
@@ -180,6 +181,22 @@ if curl -s http://127.0.0.1:18888/m | grep -q "chatgpt-pool 控制台"; then
     ok "Mobile 控制页（APK 入口 /m）正常"
 else
     bad "Mobile 控制页异常"
+fi
+echo "-- V0.4.2 API POST 验收（refresh/start/stop）--"
+if curl -s -X POST http://127.0.0.1:18888/api/refresh | grep -qE '"(accepted|status|refresh)"'; then
+    ok "POST /api/refresh 可调用"
+else
+    bad "POST /api/refresh 异常"
+fi
+if curl -s -X POST http://127.0.0.1:18888/api/start | grep -qE '"(started|running|status|reason)"'; then
+    ok "POST /api/start 可调用"
+else
+    bad "POST /api/start 异常"
+fi
+if curl -s -X POST http://127.0.0.1:18888/api/stop | grep -qE '"(stopped|status)"'; then
+    ok "POST /api/stop 可调用"
+else
+    bad "POST /api/stop 异常"
 fi
 if python3 main.py backup >/dev/null 2>&1; then
     ok "backup 可执行（§34）"
