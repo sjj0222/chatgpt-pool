@@ -319,17 +319,25 @@ class TestHTTPV04(unittest.TestCase):
             httpd.shutdown()
 
     def test_post_refresh_over_http(self):
+        # V0.4.3.3：HTTP smoke 只验证 HTTP→API→refresh 路由链路，
+        # 不得触发真实 run_refresh（公网抓取+EGRESS+mihomo 会超时）。
+        # monkeypatch services.refresh 立即返回合法摘要。
         cfg = make_cfg("v04_http2")
+        fake_summary = {
+            "published": False, "reason": "ENVIRONMENT_ANOMALY",
+            "pool_size": 0, "round_id": "smoke",
+            "reject_summary": {}, "total": 0, "final": 0,
+        }
+        orig_refresh = services.refresh
+        services.refresh = lambda c: dict(fake_summary)
         httpd = self._serve(cfg, port=19202)
         try:
             st, body = self._req(19202, "/api/refresh", method="POST")
-            self.assertIn(st, (200, 500))
+            self.assertIn(st, (200,))
             payload = json.loads(body)
-            if st == 200:
-                self.assertIn("published", payload)
-            else:
-                self.assertIn("error", payload)
+            self.assertIn("published", payload)
         finally:
+            services.refresh = orig_refresh
             httpd.shutdown()
 
     def test_post_import_over_http(self):
