@@ -5,10 +5,11 @@
 #   bash test_termux.sh
 set -u
 
-# ---- 统一运行目录（V0.4.3.1：不再依赖 cwd 相对路径）----
-BASE_DIR="${CHATGPT_POOL_BASE:-$(cd "$(dirname "$0")" && pwd)}"
+# ---- 统一运行目录（V0.4.3.2：SCRIPT_DIR=代码目录，BASE_DIR=生产根 ~/chatgpt-pool）----
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+BASE_DIR="${CHATGPT_POOL_BASE:-$(dirname "$SCRIPT_DIR")}"   # 生产 base_dir，run/ 在这里
 RUN_DIR="$BASE_DIR/run"
-cd "$BASE_DIR" || exit 1
+cd "$SCRIPT_DIR" || exit 1                                    # python3 main.py 在代码目录下跑
 
 FAIL=0
 WEB_PID=""
