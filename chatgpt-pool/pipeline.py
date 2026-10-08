@@ -99,6 +99,7 @@ def process_node(cfg, node, ctx, round_id, history):
     node.stage = Stage.PARSED.value
     t0 = time.monotonic()
     eng = None
+    reserved_port = None  # V0.4.3.3：记录预留端口，finally 中 release
     try:
         _diag_start(node.node_id, "PROXY")
         try:
@@ -112,7 +113,8 @@ def process_node(cfg, node, ctx, round_id, history):
             _diag_end(node.node_id, "PROXY", "FAIL", node.failure_reason)
             return
         try:
-            port = eng.start(node.to_dict(), ctx["alloc_port"]())
+            reserved_port = ctx["alloc_port"]()
+            port = eng.start(node.to_dict(), reserved_port)
         except engine_mod.ProxyStartError as e:
             _reject(node, FailureReason.PROXY_START_FAIL,
                     DiagnosticStage.PROXY,
@@ -203,6 +205,12 @@ def process_node(cfg, node, ctx, round_id, history):
         if eng is not None:
             try:
                 eng.stop()
+            except Exception:
+                pass
+        # V0.4.3.3：无论 start 成功/失败，预留端口都要归还进程内预留集
+        if reserved_port is not None:
+            try:
+                engine_mod.release_port(reserved_port)
             except Exception:
                 pass
         _record_node(node, history, time.monotonic() - t0)

@@ -9,6 +9,7 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 
 from yaml_lite import emit_mihomo_config
@@ -24,6 +25,13 @@ class ProxyStartError(Exception):
         self.sub = sub
 
 
+# V0.4.3.3：临时 Mihomo 端口进程内原子预留（修 TOCTOU race）。
+# 多线程并发 allocate_port() 时，同一端口不会被两个线程同时拿到；
+# eng.stop()/异常路径调 release_port() 后端口可再次分配。
+_PORT_LOCK = threading.Lock()
+_RESERVED_PORTS = set()
+
+
 def is_port_open(port, host="127.0.0.1", timeout=0.5):
     try:
         s = socket.create_connection((host, port), timeout=timeout)
@@ -34,10 +42,29 @@ def is_port_open(port, host="127.0.0.1", timeout=0.5):
 
 
 def allocate_port(start, end):
-    for p in range(int(start), int(end) + 1):
-        if not is_port_open(p):
-            return p
+    """原子预留一个端口：加锁 → 扫范围 → 选中即加入 _RESERVED_PORTS。
+
+    旧实现"先检查未占用再返回"存在 TOCTOU race——两个线程同时看到
+    18000 空闲，都返回 18000，导致 mihomo bind: address already in use。
+    现在选中即入预留集，其他线程跳过。
+    """
+    start, end = int(start), int(end)
+    with _PORT_LOCK:
+        for p in range(start, end + 1):
+            if p in _RESERVED_PORTS:
+                continue
+            if not is_port_open(p):
+                _RESERVED_PORTS.add(p)
+                return p
     raise ProxyStartError(f"no free port in {start}-{end}")
+
+
+def release_port(port):
+    """释放已预留端口（eng.stop() 或异常路径调用）。"""
+    if port is None:
+        return
+    with _PORT_LOCK:
+        _RESERVED_PORTS.discard(int(port))
 
 
 class MihomoEngine:
