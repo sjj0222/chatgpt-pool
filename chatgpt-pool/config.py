@@ -27,7 +27,7 @@ DEFAULTS = {
     "min_online_country_codes": 20,
 
     # ---- 出口 IP / GeoIP（§5）----
-    "geoip_url": "https://ip-api.com/json/",
+    "geoip_url": "https://ipwho.is/",
 
     # ---- ChatGPT 严格检测 endpoint（§10 / P1-07）----
     "home_endpoint": "https://chat.openai.com/",
