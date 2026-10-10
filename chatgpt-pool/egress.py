@@ -2,10 +2,12 @@
 
 只认真实出口 IP 对应的国家；节点名称/域名/SNI/标签一律不参与（§4.1）。
 传输层失败细分（V0.2.2 P0-01）：超时类统一归 EGRESS_TIMEOUT（egress 阶段语义），
-其余细分原因透传；拿到响应但解析不出 IP → NO_EGRESS_IP。
+其余细分原因透传；出口服务错误、无效响应或缺少有效 IP/国家代码均拒绝通过。
 """
+import ipaddress
 import json
 import logging
+import re
 
 from models import FailureReason, SubReason
 from probe import ProbeError
@@ -32,19 +34,40 @@ def get_egress(probe, cfg):
     if r.status is None or r.status >= 400:
         return None, None, FailureReason.NO_EGRESS_IP, \
             SubReason.NO_EGRESS_IP, {
-                "status": r.status, "url": cfg.geoip_url}
+                "status": r.status, "url": cfg.geoip_url,
+                "response_kind": "http_error"}
     try:
         data = json.loads(r.body)
-        ip = data.get("query") or data.get("ip") or ""
-        iso = (data.get("countryCode") or data.get("country") or "").upper()
+        if not isinstance(data, dict):
+            raise ValueError("GeoIP JSON must be an object")
+        # ipwho.is may return success=false even with HTTP 200.
+        if data.get("success") is False:
+            return None, None, FailureReason.NO_EGRESS_IP, \
+                SubReason.NO_EGRESS_IP, {
+                    "status": r.status, "url": cfg.geoip_url,
+                    "response_kind": "geoip_service_error",
+                    "message": str(data.get("message", ""))[:200]}
+        ip = str(data.get("query") or data.get("ip") or "").strip()
+        raw_iso = data.get("countryCode") or data.get("country_code") or data.get("country") or ""
+        iso = str(raw_iso).strip().upper()
     except Exception:
         return None, None, FailureReason.NO_EGRESS_IP, \
             SubReason.NO_EGRESS_IP, {
                 "status": r.status, "url": cfg.geoip_url,
+                "response_kind": "invalid_json",
                 "body_snippet": (r.body or "")[:200]}
-    if not ip:
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
         return None, None, FailureReason.NO_EGRESS_IP, \
             SubReason.NO_EGRESS_IP, {
                 "status": r.status, "url": cfg.geoip_url,
+                "response_kind": "invalid_ip",
                 "body_snippet": (r.body or "")[:200]}
-    return ip, (iso or None), None, None, None
+    if not re.fullmatch(r"[A-Z]{2}", iso):
+        return None, None, FailureReason.NO_EGRESS_IP, \
+            SubReason.NO_EGRESS_IP, {
+                "status": r.status, "url": cfg.geoip_url,
+                "response_kind": "missing_or_invalid_country_code",
+                "body_snippet": (r.body or "")[:200]}
+    return ip, iso, None, None, None
