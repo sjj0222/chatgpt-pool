@@ -9,7 +9,7 @@
   "refresh_interval": 7200,
   "country_source_url": "https://platform.openai.com/docs/supported-countries",
   "min_online_country_codes": 20,
-  "geoip_url": "https://ip-api.com/json/",
+  "geoip_url": "https://ipwho.is/",
   "home_endpoint": "https://chat.openai.com/",
   "auth_endpoint": "https://chat.openai.com/api/auth/csrf",
   "backend_endpoint": "https://chat.openai.com/backend-api/me",
