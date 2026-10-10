@@ -46,9 +46,9 @@ NODE_C = ("vmess://eyJ2IjoiMiIsInBzIjoibm9kZUMiLCJhZGQiOiJleGFtcGxlLmNvbSIs"
 def _mixed_fail_probe(site):
     """geoip 成功（US），chatgpt 三个 endpoint 全 TLS_TIMEOUT → TLS 阶段失败。"""
     def fn(url):
-        if "ip-api.com" in url:
+        if "ipwho.is" in url:
             return ProbeResult(200, url, "application/json",
-                               '{"query":"203.0.113.9","countryCode":"US"}')
+                               '{"ip":"203.0.113.9","country_code":"US","success":true}')
         raise ProbeError(FailureReason.TLS_FAIL,
                          sub=SubReason.TLS_TIMEOUT,
                          detail={"type": "socket.timeout",
@@ -168,6 +168,53 @@ class TestEgressDiagnostics(unittest.TestCase):
         self.assertEqual(reason, FailureReason.TIMEOUT)
         self.assertEqual(sub, SubReason.EGRESS_TIMEOUT)
         self.assertEqual(detail["probe_sub"], "TLS_TIMEOUT")
+
+    def test_ipwhois_response(self):
+        cfg = self._cfg()
+        def probe(url):
+            return ProbeResult(200, url, "application/json",
+                               '{"ip":"198.51.100.8","country_code":"US","success":true}')
+        ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
+        self.assertEqual((ip, iso, reason, sub, detail),
+                         ("198.51.100.8", "US", None, None, None))
+
+    def test_http_error_keeps_status_diagnostic(self):
+        cfg = self._cfg()
+        def probe(url):
+            return ProbeResult(403, url, "application/json", '{"message":"denied"}')
+        ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
+        self.assertIsNone(ip)
+        self.assertEqual(reason, FailureReason.NO_EGRESS_IP)
+        self.assertEqual(detail["status"], 403)
+        self.assertEqual(detail["response_kind"], "http_error")
+
+    def test_ipwhois_service_failure_with_http_200(self):
+        cfg = self._cfg()
+        def probe(url):
+            return ProbeResult(200, url, "application/json",
+                               '{"success":false,"message":"rate limit"}')
+        ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
+        self.assertIsNone(ip)
+        self.assertEqual(reason, FailureReason.NO_EGRESS_IP)
+        self.assertEqual(detail["response_kind"], "geoip_service_error")
+
+    def test_invalid_ip_rejected(self):
+        cfg = self._cfg()
+        def probe(url):
+            return ProbeResult(200, url, "application/json",
+                               '{"ip":"not-an-ip","country_code":"US","success":true}')
+        ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
+        self.assertIsNone(ip)
+        self.assertEqual(detail["response_kind"], "invalid_ip")
+
+    def test_missing_country_code_rejected(self):
+        cfg = self._cfg()
+        def probe(url):
+            return ProbeResult(200, url, "application/json",
+                               '{"ip":"198.51.100.8","success":true}')
+        ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
+        self.assertIsNone(ip)
+        self.assertEqual(detail["response_kind"], "missing_or_invalid_country_code")
 
 
 class TestChatgptDiagnostics(unittest.TestCase):
@@ -350,7 +397,7 @@ class TestDetectLog(unittest.TestCase):
         dt.addHandler(logging.FileHandler(log_path, encoding="utf-8"))
 
         def probe(url):
-            if "ip-api.com" in url:
+            if "ipwho.is" in url:
                 return ProbeResult(200, url, "application/json",
                                    '{"query":"203.0.113.9","countryCode":"US"}')
             raise ProbeError(FailureReason.TLS_FAIL,
