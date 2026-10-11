@@ -65,9 +65,9 @@ def get_egress(probe, cfg):
                 "status": r.status, "url": cfg.geoip_url,
                 "response_kind": "invalid_ip",
                 "body_snippet": (r.body or "")[:200]}
-    # is_global excludes private, loopback, link-local, multicast, reserved,
-    # documentation/test ranges, unspecified, and other non-public addresses.
-    if not ip_obj.is_global:
+    # Explicitly reject multicast: Python/platform ipaddress.is_global behavior
+    # can classify multicast ranges inconsistently across runtime versions.
+    if ip_obj.is_multicast or not ip_obj.is_global:
         return None, None, FailureReason.NO_EGRESS_IP, \
             SubReason.NO_EGRESS_IP, {
                 "status": r.status, "url": cfg.geoip_url,
