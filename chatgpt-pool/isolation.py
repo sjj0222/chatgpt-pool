@@ -88,7 +88,8 @@ def rollback_pool(cfg, ts=None):
                 chosen = s
                 break
     try:
-        data = json.load(open(chosen, encoding="utf-8"))
+        with open(chosen, encoding="utf-8") as f:
+            data = json.load(f)
         if not data.get("nodes"):
             log.warning("rollback snapshot empty: %s", chosen)
             return None
