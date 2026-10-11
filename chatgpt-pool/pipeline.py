@@ -493,6 +493,82 @@ def run_refresh(cfg, inject=None):
         raise
 
 
+def _read_file_bytes(path):
+    """读取文件原始字节；不存在时返回 None。"""
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_file_bytes(path, previous):
+    """恢复发布事务中的单个文件；previous=None 表示发布前不存在。"""
+    if previous is None:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".rollback.tmp"
+    with open(tmp, "wb") as f:
+        f.write(previous)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _publish_pool_transaction(cfg, round_id, nodes):
+    """将订阅、current.json、快照作为一个可回滚发布事务。
+
+    任一阶段失败时恢复订阅与 current.json 的发布前字节，并清理本轮新建的
+    快照。首次发布失败时删除本轮生成的订阅，绝不留下半完成的新状态。
+    """
+    pool_path = cfg.pool_path
+    current_path = cfg.sub("run/final/current.json")
+    previous_pool = _read_file_bytes(pool_path)
+    previous_current = _read_file_bytes(current_path)
+    history_dir = cfg.sub("run/history/pool")
+    try:
+        before_snapshots = set(os.listdir(history_dir)) if os.path.isdir(history_dir) else set()
+    except OSError:
+        before_snapshots = set()
+
+    try:
+        poolstore.emit_and_publish(cfg, nodes)
+        poolstore.write_current_final(cfg, round_id, nodes)
+        isolation.snapshot_pool(cfg, round_id)
+    except Exception as publish_error:
+        rollback_errors = []
+        for target, previous in ((pool_path, previous_pool),
+                                 (current_path, previous_current)):
+            try:
+                _restore_file_bytes(target, previous)
+            except Exception as rollback_error:
+                rollback_errors.append(f"{target}: {rollback_error}")
+                log.exception("publish rollback failed for %s", target)
+        # 如果快照复制在中途失败，删除本轮新产生的快照，避免它被误当成有效版本。
+        try:
+            if os.path.isdir(history_dir):
+                for name in os.listdir(history_dir):
+                    if name not in before_snapshots and name.endswith("_" + round_id + ".json"):
+                        try:
+                            os.remove(os.path.join(history_dir, name))
+                        except FileNotFoundError:
+                            pass
+        except Exception as cleanup_error:
+            rollback_errors.append(f"snapshot cleanup: {cleanup_error}")
+            log.exception("publish rollback snapshot cleanup failed")
+        if rollback_errors:
+            raise RuntimeError(
+                f"publish failed: {publish_error}; rollback incomplete: "
+                + "; ".join(rollback_errors)
+            ) from publish_error
+        raise
+    return True
+
+
 def _run_refresh_inner(cfg, inject, round_id, summary, history):
     """run_refresh 主体（V0.4.3：被顶层 try/except 包裹做诊断兜底）。"""
 
@@ -592,13 +668,11 @@ def _run_refresh_inner(cfg, inject, round_id, summary, history):
         poolstore.write_failed_round(cfg, round_id, summary)
     elif new_pool:
         try:
-            poolstore.emit_and_publish(cfg, new_pool)
-            poolstore.write_current_final(cfg, round_id, new_pool)
+            _publish_pool_transaction(cfg, round_id, new_pool)
             published = True
             summary["reason"] = None
-            isolation.snapshot_pool(cfg, round_id)   # V0.3 Phase 8（§30）
         except Exception as e:
-            log.exception("publish failed; old pool preserved")
+            log.exception("publish failed; rollback attempted")
             summary["reason"] = f"VALIDATION_FAIL: {e}"
             poolstore.write_failed_round(cfg, round_id, summary)
     else:
