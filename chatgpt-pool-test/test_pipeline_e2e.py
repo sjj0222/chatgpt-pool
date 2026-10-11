@@ -35,7 +35,8 @@ class TestPipelineE2E(unittest.TestCase):
         self.assertTrue(s["published"], s)
         self.assertEqual(s["new_pool_count"], 2)   # 去重后 2 个节点全部 FINAL
         self.assertEqual(s["dupes"], 1)            # 重复行被去重（§23）
-        text = open(cfg.pool_path).read()
+        with open(cfg.pool_path, encoding="utf-8") as f:
+            text = f.read()
         self.assertIn("proxies:", text)
         self.assertIn("10.0.0.1", text)
         self.assertIn("10.0.0.2", text)
