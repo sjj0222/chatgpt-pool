@@ -124,7 +124,7 @@ class TestAnomalyGuard(unittest.TestCase):
                 if "ipwho.is" in url or "ip-api.com" in url:
                     return ProbeResult(
                         200, url, "application/json",
-                        '{"ip":"203.0.113.9","country_code":"US","success":true}')
+                        '{"ip":"8.8.8.8","country_code":"US","success":true}')
                 raise ProbeError(
                     FailureReason.TLS_FAIL,
                     sub=SubReason.TLS_TIMEOUT,
