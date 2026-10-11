@@ -15,7 +15,8 @@ import isolation                                          # noqa: E402
 import pipeline                                          # noqa: E402
 from lifecycle import FAILED_EXPIRY_SECONDS               # noqa: E402
 from lifecycle_store import NodeLifecycleStore            # noqa: E402
-from models import Node, LifecycleState                   # noqa: E402
+from models import Node, LifecycleState, FailureReason, SubReason  # noqa: E402
+from probe import ProbeError, ProbeResult                    # noqa: E402
 from helpers import LocalMockSite, make_cfg, strict_success_routes  # noqa: E402
 from test_diagnostic import _inject                       # noqa: E402
 
@@ -62,7 +63,8 @@ class TestSnapshotRollback(unittest.TestCase):
             json.dump({"round_id": "bad", "nodes": []}, f)
         chosen = isolation.rollback_pool(cfg)
         self.assertIsNotNone(chosen)
-        data = json.load(open(cfg.sub("run/final/current.json")))
+        with open(cfg.sub("run/final/current.json"), encoding="utf-8") as f:
+            data = json.load(f)
         self.assertEqual(data["nodes"][0]["node_id"], "a")
 
     def test_rollback_requires_nonempty(self):
@@ -116,16 +118,18 @@ class TestAnomalyGuard(unittest.TestCase):
             for i in range(12))
 
         def all_fail_probe(site):
-            def fn(node, port):
-                from models import (ChatgptStatus, DiagnosticStage,
-                                    FailureReason, SubReason)
-                node.stage = "REJECTED"
-                node.chatgpt_status = ChatgptStatus.FAIL.value
-                node.failure_reason = FailureReason.TLS_FAIL.value
-                node.failure_stage = DiagnosticStage.TLS.value
-                node.failure_detail = {"sub_reason":
-                                       SubReason.TLS_TIMEOUT.value}
-                return node
+            # probe_fn 接收 URL：GeoIP 阶段应成功，ChatGPT 端点统一模拟 TLS 超时。
+            # 这样测试的是环境异常守卫，而不是探针签名不匹配。
+            def fn(url):
+                if "ipwho.is" in url or "ip-api.com" in url:
+                    return ProbeResult(
+                        200, url, "application/json",
+                        '{"ip":"203.0.113.9","country_code":"US","success":true}')
+                raise ProbeError(
+                    FailureReason.TLS_FAIL,
+                    sub=SubReason.TLS_TIMEOUT,
+                    detail={"type": "socket.timeout", "elapsed_ms": 3500,
+                            "url": url})
             return fn
 
         with LocalMockSite(strict_success_routes()) as site:
