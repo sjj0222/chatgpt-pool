@@ -57,12 +57,22 @@ def get_egress(probe, cfg):
                 "response_kind": "invalid_json",
                 "body_snippet": (r.body or "")[:200]}
     try:
-        ip = str(ipaddress.ip_address(ip))
+        ip_obj = ipaddress.ip_address(ip)
+        ip = str(ip_obj)
     except ValueError:
         return None, None, FailureReason.NO_EGRESS_IP, \
             SubReason.NO_EGRESS_IP, {
                 "status": r.status, "url": cfg.geoip_url,
                 "response_kind": "invalid_ip",
+                "body_snippet": (r.body or "")[:200]}
+    # is_global excludes private, loopback, link-local, multicast, reserved,
+    # documentation/test ranges, unspecified, and other non-public addresses.
+    if not ip_obj.is_global:
+        return None, None, FailureReason.NO_EGRESS_IP, \
+            SubReason.NO_EGRESS_IP, {
+                "status": r.status, "url": cfg.geoip_url,
+                "response_kind": "non_public_ip",
+                "ip": ip,
                 "body_snippet": (r.body or "")[:200]}
     if not re.fullmatch(r"[A-Z]{2}", iso):
         return None, None, FailureReason.NO_EGRESS_IP, \
