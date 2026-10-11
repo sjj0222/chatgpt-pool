@@ -48,7 +48,7 @@ def _mixed_fail_probe(site):
     def fn(url):
         if "ipwho.is" in url:
             return ProbeResult(200, url, "application/json",
-                               '{"ip":"203.0.113.9","country_code":"US","success":true}')
+                               '{"ip":"8.8.8.8","country_code":"US","success":true}')
         raise ProbeError(FailureReason.TLS_FAIL,
                          sub=SubReason.TLS_TIMEOUT,
                          detail={"type": "socket.timeout",
@@ -173,10 +173,10 @@ class TestEgressDiagnostics(unittest.TestCase):
         cfg = self._cfg()
         def probe(url):
             return ProbeResult(200, url, "application/json",
-                               '{"ip":"198.51.100.8","country_code":"US","success":true}')
+                               '{"ip":"1.1.1.1","country_code":"US","success":true}')
         ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
         self.assertEqual((ip, iso, reason, sub, detail),
-                         ("198.51.100.8", "US", None, None, None))
+                         ("1.1.1.1", "US", None, None, None))
 
     def test_http_error_keeps_status_diagnostic(self):
         cfg = self._cfg()
@@ -211,7 +211,7 @@ class TestEgressDiagnostics(unittest.TestCase):
         cfg = self._cfg()
         def probe(url):
             return ProbeResult(200, url, "application/json",
-                               '{"ip":"198.51.100.8","success":true}')
+                               '{"ip":"1.1.1.1","success":true}')
         ip, iso, reason, sub, detail = egress.get_egress(probe, cfg)
         self.assertIsNone(ip)
         self.assertEqual(detail["response_kind"], "missing_or_invalid_country_code")
@@ -399,7 +399,7 @@ class TestDetectLog(unittest.TestCase):
         def probe(url):
             if "ipwho.is" in url:
                 return ProbeResult(200, url, "application/json",
-                                   '{"query":"203.0.113.9","countryCode":"US"}')
+                                   '{"query":"8.8.8.8","countryCode":"US"}')
             raise ProbeError(FailureReason.TLS_FAIL,
                              sub=SubReason.TLS_TIMEOUT, detail={})
         with LocalMockSite(strict_success_routes()) as site:
