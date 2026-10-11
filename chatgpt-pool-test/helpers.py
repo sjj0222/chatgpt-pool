@@ -103,7 +103,7 @@ def chatgpt_probe(site, geoip_body=None):
         geoip_body = json.dumps({"query": "203.0.113.9", "countryCode": "US"})
 
     def fn(url):
-        if "ip-api.com" in url:
+        if "ip-api.com" in url or "ipwho.is" in url:
             return ProbeResult(200, url, "application/json", geoip_body)
         path = urllib.parse.urlsplit(url).path or "/"
         key = "/" if path == "/" else ("/auth" if "csrf" in path else "/backend")
