@@ -24,7 +24,7 @@ SS_ONE = ("ss://" + base64.b64encode(b"aes-256-gcm:pass1").decode()
 SS_TWO = ("ss://" + base64.b64encode(b"aes-256-gcm:pass2").decode()
           + "@10.0.0.2:8388#JP")
 SOURCE = SS_ONE + "\n" + SS_TWO + "\n"
-GEO_CN = json.dumps({"query": "203.0.113.9", "countryCode": "CN"})
+GEO_CN = json.dumps({"query": "8.8.8.8", "countryCode": "CN"})
 
 
 def _inject(site, country=None, engine_ok=True, geoip_body=None):
