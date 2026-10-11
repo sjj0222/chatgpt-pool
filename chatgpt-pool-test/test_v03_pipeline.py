@@ -45,9 +45,9 @@ class TestFingerprintInPipeline(unittest.TestCase):
         lc1 = NodeLifecycleStore(cfg.sub("state/node_lifecycle.json"))
         # 构造"迁移"节点：参数完全相同、仅 node_id/name 不同
         migrated = NODE_A.replace("#nodeA", "#nodeA-renamed")
-        inject2 = _inject(None)
-        inject2["fetchers"] = lambda: [("srcB", migrated)]
         with LocalMockSite(strict_success_routes()) as site2:
+            inject2 = _inject(site2)
+            inject2["fetchers"] = lambda: [("srcB", migrated)]
             pipeline.run_refresh(cfg, inject=inject2)
         lc2 = NodeLifecycleStore(cfg.sub("state/node_lifecycle.json"))
         # 新 node_id 应继承旧 fingerprint（同 fingerprint 存在）
