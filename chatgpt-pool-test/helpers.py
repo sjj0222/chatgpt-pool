@@ -100,7 +100,7 @@ def strict_success_routes():
 def chatgpt_probe(site, geoip_body=None):
     """把 chatgpt 端点映射到本地站点；geoip 返回脚本化出口 IP。"""
     if geoip_body is None:
-        geoip_body = json.dumps({"query": "203.0.113.9", "countryCode": "US"})
+        geoip_body = json.dumps({"query": "8.8.8.8", "countryCode": "US"})
 
     def fn(url):
         if "ip-api.com" in url or "ipwho.is" in url:
