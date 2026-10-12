@@ -12,7 +12,9 @@ from models import FailureReason
 class TestCountryList(unittest.TestCase):
 
     def _codes(self, n=25):
-        return [f"X{i:02d}" for i in range(n)] + ["US", "JP"]
+        # V0.4.5：改用 ISO 白名单中的有效代码（确定性排序），不再用 X00 等无效码
+        valid = sorted(countries.ISO3166_ALPHA2)
+        return valid[:n] + ["US", "JP"]
 
     def test_online_first(self):
         cfg = make_cfg("country_online")
@@ -23,6 +25,11 @@ class TestCountryList(unittest.TestCase):
         self.assertEqual(source, "online")
         self.assertIsNone(warn)
         self.assertTrue(os.path.isfile(cfg.country_cache_path))
+        # V0.4.5：在线结果与写入缓存的代码必须全部合法
+        self.assertTrue(all(countries.is_valid_code(c) for c in got))
+        with open(cfg.country_cache_path, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        self.assertTrue(all(countries.is_valid_code(c) for c in cached))
 
     def test_cache_fallback(self):
         cfg = make_cfg("country_cache")

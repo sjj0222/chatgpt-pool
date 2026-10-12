@@ -64,25 +64,35 @@ class TestIsoSet(unittest.TestCase):
 
 
 class TestOnlineValidity(unittest.TestCase):
-    """在线列表必须逐项验证，不能仅凭两位大写数量达标就接受。"""
+    """在线列表必须通过名称列表结构解析并逐项验证（V0.4.5：禁止全文双字母正则）。"""
+
+    # 足够数量的真实国家名称（fixture 子集），映射后均有效
+    _NAMES = [
+        "Albania", "Algeria", "Argentina", "Australia", "Austria", "Belgium",
+        "Brazil", "Canada", "Chile", "Colombia", "Croatia", "Denmark",
+        "Ecuador", "Egypt", "Estonia", "Finland", "France", "Germany",
+        "Greece", "Iceland", "India", "Ireland", "Italy", "Japan", "Mexico",
+    ]
 
     def test_online_accepts_valid_codes(self):
         cfg = make_cfg("country_ov")
-        body = " ".join(sorted(countries.ISO3166_ALPHA2))
+        body = "\n".join("- " + n for n in self._NAMES)
         with mock.patch("probe.NoProxyProbe",
                         side_effect=_fake_probe(body)):
             got = countries.fetch_online_countries(cfg)
         self.assertIsNotNone(got)
-        self.assertEqual(len(got), 249)
+        self.assertEqual(len(got), len(self._NAMES))
         self.assertTrue(all(countries.is_valid_code(c) for c in got))
 
     def test_online_filters_noise_codes(self):
-        """页面混入 EU/UK 等非 ISO 词：剔除后有效数达标即可接受，噪声不得进入。"""
+        """页面混入 EU/UK/ZZ 噪声（非列表结构或未知名称）：不得进入结果。"""
         cfg = make_cfg("country_noise")
-        valid = ["US", "JP", "GB", "CA", "AU", "DE", "FR", "IT", "ES", "NL",
-                 "SE", "NO", "DK", "FI", "PL", "IE", "AT", "BE", "CH", "PT",
-                 "KR", "SG", "IN"]
-        body = " ".join(valid + ["EU", "UK", "ZZ"])
+        body = ("- Albania\n- Algeria\n- Argentina\n- Australia\n- Austria\n"
+                "- Belgium\n- Brazil\n- Canada\n- Chile\n- Colombia\n"
+                "- Croatia\n- Denmark\n- Ecuador\n- Egypt\n- Estonia\n"
+                "- Finland\n- France\n- Germany\n- Greece\n- Iceland\n"
+                "- India\n- Ireland\n- Italy\n- Japan\n- Mexico\n"
+                "EU UK ZZ\n")  # 非列表结构的噪声行
         with mock.patch("probe.NoProxyProbe",
                         side_effect=_fake_probe(body)):
             got = countries.fetch_online_countries(cfg)
@@ -93,19 +103,23 @@ class TestOnlineValidity(unittest.TestCase):
         self.assertTrue(all(countries.is_valid_code(c) for c in got))
 
     def test_online_rejects_when_valid_below_min(self):
-        """大量无效代码混入：剔除后有效数不足 → 不得当作完全有效接受。"""
+        """大量未知噪声混入：有效数不足 → 不得当作完全有效接受。"""
         cfg = make_cfg("country_dirty")
         cfg.min_online_country_codes = 20
-        body = " ".join(["ZZ"] * 20 + ["US", "JP", "GB", "CA", "AU"])
+        body = "\n".join(["- ZZ"] * 20 +
+                         ["- Albania", "- Algeria", "- Argentina",
+                          "- Australia", "- Austria"])
         with mock.patch("probe.NoProxyProbe",
                         side_effect=_fake_probe(body)):
             self.assertIsNone(countries.fetch_online_countries(cfg))
 
     def test_online_rejects_few_codes(self):
+        """只有少量真实国家名称（< 阈值）→ 在线来源拒绝。"""
         cfg = make_cfg("country_few2")
         cfg.min_online_country_codes = 20
+        body = "- Albania\n- Algeria\n- Argentina\n"
         with mock.patch("probe.NoProxyProbe",
-                        side_effect=_fake_probe("US JP GB")):
+                        side_effect=_fake_probe(body)):
             self.assertIsNone(countries.fetch_online_countries(cfg))
 
     def test_online_http_error_returns_none(self):
