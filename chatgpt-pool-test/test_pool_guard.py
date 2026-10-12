@@ -93,7 +93,8 @@ class TestPoolGuard(unittest.TestCase):
 
     def test_unsupported_country_rejected_and_preserved(self):
         cfg = make_cfg("guard_country")
-        geo = json.dumps({"query": "203.0.113.9", "countryCode": "CN"})
+        # 公网 IP（V0.4 EGRESS 校验拒绝非公网/保留地址，203.0.113.x 会先触发 NO_EGRESS_IP）
+        geo = json.dumps({"query": "8.8.8.8", "countryCode": "CN"})
         with LocalMockSite(strict_success_routes()) as site:
             inj = {
                 "fetchers": lambda: [("mock", SOURCE_CN)],
