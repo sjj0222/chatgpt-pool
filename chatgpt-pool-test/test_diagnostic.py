@@ -175,7 +175,8 @@ class TestChatgptDiagnostics(unittest.TestCase):
 
     def test_blocked_all(self):
         cfg = make_cfg("d_blocked")
-        routes = {p: (403, {}, b"blocked") for p in
+        # V0.4.4：403 不直接等于地区封锁；用明确地区限制文本构造全阻断
+        routes = {p: (403, {}, b"not available in your country") for p in
                   ("/", "/auth", "/backend")}
         with LocalMockSite(routes) as site:
             res = chatgpt_check.run_strict_check(

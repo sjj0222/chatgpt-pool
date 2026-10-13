@@ -26,14 +26,18 @@ _HANDSHAKE_MARKERS = ("handshake", "alert", "wrong version", "tls",
 
 
 class ProbeResult:
-    __slots__ = ("status", "final_url", "content_type", "body", "elapsed")
+    """探测结果。headers 为原始响应头（dict，向后兼容：未提供时为空）。"""
+    __slots__ = ("status", "final_url", "content_type", "body", "elapsed",
+                 "headers")
 
-    def __init__(self, status, final_url, content_type, body, elapsed=0.0):
+    def __init__(self, status, final_url, content_type, body, elapsed=0.0,
+                 headers=None):
         self.status = status
         self.final_url = final_url
         self.content_type = content_type
         self.body = body
         self.elapsed = elapsed
+        self.headers = dict(headers) if headers else {}
 
 
 class ProbeError(Exception):
@@ -165,12 +169,13 @@ def _do_get(url, cfg, proxy_port=None, read_limit=65536, preflight=True):
             return ProbeResult(
                 resp.status, resp.geturl(),
                 resp.headers.get("Content-Type", ""), body,
-                time.time() - t0)
+                time.time() - t0, headers=dict(resp.headers))
     except urllib.error.HTTPError as e:
         body = e.read(read_limit).decode("utf-8", "replace")
         return ProbeResult(
             e.code, e.geturl() if hasattr(e, "geturl") else url,
-            e.headers.get("Content-Type", ""), body, time.time() - t0)
+            e.headers.get("Content-Type", ""), body, time.time() - t0,
+            headers=dict(e.headers))
     except urllib.error.URLError as e:
         top, sub, detail = classify_exception(e.reason, url)
         raise ProbeError(top, sub=sub,

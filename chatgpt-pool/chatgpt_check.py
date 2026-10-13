@@ -3,6 +3,11 @@
 STRICT_PASS = HOME_OK AND (AUTH_OK OR BACKEND_OK)
 - Backend 401 → BACKEND_AUTH_REQUIRED（仅网络证据，不参与 BACKEND_OK，P1-01）。
 - 单个 endpoint 403 不直接淘汰（§13）；仅当核心检测全部被明确阻断 → OPENAI_BLOCKED。
+- V0.4.4（检测准确性）：403 不直接等于地区封锁。区分三类证据：
+  ① 明确的地区限制文本（BLOCK_MARKERS）→ blocked=True（地区封锁）；
+  ② Cloudflare challenge（响应头 cf-mitigated: challenge）→ challenge=True，
+     不得误报为 OPENAI_BLOCKED；
+  ③ 普通 403（无上述证据）→ 记为 *_FORBIDDEN，不设 blocked。
 - WebSocket 是辅助检测，WS 结果不构成否决（§14）。
 - 检测明细与 failure_reason 分离（P1-04）。
 - V0.2.2：细分原因（SubReason）——全核心阻断 → CHATGPT_BLOCKED；
@@ -24,15 +29,43 @@ BLOCK_MARKERS = [
     "access denied",
 ]
 
+# Cloudflare 挑战证据头：cf-mitigated: challenge
+CHALLENGE_HEADER = "cf-mitigated"
+
 
 def _blocked(body):
     b = (body or "").lower()
     return any(m in b for m in BLOCK_MARKERS)
 
 
+def _is_challenge(res):
+    """依据响应头识别 Cloudflare challenge（大小写不敏感）。"""
+    if res is None:
+        return False
+    for k, v in (res.headers or {}).items():
+        if str(k).lower() == CHALLENGE_HEADER and "challenge" in str(v).lower():
+            return True
+    return False
+
+
+def _classify_http_fail(out, res):
+    """按证据分类非 2xx/3xx 结果（403 不再直接判定地区封锁）。
+
+    ① body 命中 BLOCK_MARKERS → blocked=True（明确地区限制证据）；
+    ② cf-mitigated: challenge → challenge=True（不得误报 OPENAI_BLOCKED）；
+    ③ 其余（普通 403 等）→ 仅记 result，不设 blocked。
+    """
+    if _blocked(res.body):
+        out["blocked"] = True
+    elif _is_challenge(res):
+        out["challenge"] = True
+    return out
+
+
 def _probe_home(res):
     out = {"ok": False, "status": None, "final_url": "", "content_type": "",
-           "feature_match": False, "blocked": False, "result": "HOME_FAIL"}
+           "feature_match": False, "blocked": False, "challenge": False,
+           "result": "HOME_FAIL"}
     if res is None:
         return out
     out["status"] = res.status
@@ -49,15 +82,25 @@ def _probe_home(res):
         out["ok"] = out["feature_match"]
         if out["ok"]:
             out["result"] = "HOME_OK"
-    if res.status == 403 or _blocked(res.body):
-        out["blocked"] = True
-        out["result"] = "HOME_BLOCKED"
+        # 地区限制证据不依赖状态码：200 页面带明确封锁文本同样判定
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["result"] = "HOME_BLOCKED"
+    elif res.status is not None and res.status >= 400:
+        _classify_http_fail(out, res)
+        if out["blocked"]:
+            out["result"] = "HOME_BLOCKED"
+        elif out["challenge"]:
+            out["result"] = "HOME_CHALLENGE"
+        elif res.status == 403:
+            out["result"] = "HOME_FORBIDDEN"
     return out
 
 
 def _probe_auth(res):
     out = {"ok": False, "status": None, "final_url": "", "content_type": "",
-           "feature_match": False, "blocked": False, "result": "AUTH_FAIL"}
+           "feature_match": False, "blocked": False, "challenge": False,
+           "result": "AUTH_FAIL"}
     if res is None:
         return out
     out["status"] = res.status
@@ -72,16 +115,24 @@ def _probe_auth(res):
         out["ok"] = out["feature_match"]
         if out["ok"]:
             out["result"] = "AUTH_OK"
-    if res.status == 403 or _blocked(res.body):
-        out["blocked"] = True
-        out["result"] = "AUTH_BLOCKED"
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["result"] = "AUTH_BLOCKED"
+    elif res.status is not None and res.status >= 400:
+        _classify_http_fail(out, res)
+        if out["blocked"]:
+            out["result"] = "AUTH_BLOCKED"
+        elif out["challenge"]:
+            out["result"] = "AUTH_CHALLENGE"
+        elif res.status == 403:
+            out["result"] = "AUTH_FORBIDDEN"
     return out
 
 
 def _probe_backend(res):
     out = {"ok": False, "status": None, "final_url": "", "content_type": "",
-           "feature_match": False, "blocked": False, "kind": "FAIL",
-           "result": "BACKEND_FAIL"}
+           "feature_match": False, "blocked": False, "challenge": False,
+           "kind": "FAIL", "result": "BACKEND_FAIL"}
     if res is None:
         return out
     out["status"] = res.status
@@ -98,10 +149,21 @@ def _probe_backend(res):
         out["ok"] = out["feature_match"]
         out["kind"] = "OK" if out["ok"] else "FAIL"
         out["result"] = "BACKEND_OK" if out["ok"] else "BACKEND_FAIL"
-    elif res.status == 403 or _blocked(res.body):
-        out["blocked"] = True
-        out["kind"] = "BLOCKED"
-        out["result"] = "BACKEND_BLOCKED"
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["kind"] = "BLOCKED"
+            out["result"] = "BACKEND_BLOCKED"
+    elif res.status is not None and res.status >= 400:
+        _classify_http_fail(out, res)
+        if out["blocked"]:
+            out["kind"] = "BLOCKED"
+            out["result"] = "BACKEND_BLOCKED"
+        elif out["challenge"]:
+            out["kind"] = "CHALLENGE"
+            out["result"] = "BACKEND_CHALLENGE"
+        elif res.status == 403:
+            out["kind"] = "FORBIDDEN"
+            out["result"] = "BACKEND_FORBIDDEN"
     return out
 
 
