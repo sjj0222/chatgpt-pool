@@ -8,6 +8,10 @@ STRICT_PASS = HOME_OK AND (AUTH_OK OR BACKEND_OK)
   ② Cloudflare challenge（响应头 cf-mitigated: challenge）→ challenge=True，
      不得误报为 OPENAI_BLOCKED；
   ③ 普通 403（无上述证据）→ 记为 *_FORBIDDEN，不设 blocked。
+- V0.4.4 P2：challenge 证据统一在探测开头提取（大小写不敏感），适用于
+  200/3xx/4xx 各分支；challenge 响应不得判 OK。P1：challenge 头证据优先于
+  正文文案——"Access denied" 等通用拒绝文案不再作为可靠地区限制证据
+  （已从 BLOCK_MARKERS 移除），避免 Cloudflare challenge 页被误判地区封锁。
 - WebSocket 是辅助检测，WS 结果不构成否决（§14）。
 - 检测明细与 failure_reason 分离（P1-04）。
 - V0.2.2：细分原因（SubReason）——全核心阻断 → CHATGPT_BLOCKED；
@@ -20,13 +24,14 @@ from probe import ProbeError
 
 log = logging.getLogger("pool.chatgpt")
 
+# 明确的地区限制证据（V0.4.4 P1：不含通用拒绝文案，如 "access denied"——
+# Cloudflare challenge / WAF / 服务器拒绝都可能出现，不是可靠地区证据）。
 BLOCK_MARKERS = [
     "not available in your country",
     "unavailable in your country",
     "country is not supported",
     "is not supported in your country",
     "geoblocked",
-    "access denied",
 ]
 
 # Cloudflare 挑战证据头：cf-mitigated: challenge
@@ -49,16 +54,13 @@ def _is_challenge(res):
 
 
 def _classify_http_fail(out, res):
-    """按证据分类非 2xx/3xx 结果（403 不再直接判定地区封锁）。
+    """非 2xx/3xx 分类（challenge 已在探测开头统一提取）。
 
-    ① body 命中 BLOCK_MARKERS → blocked=True（明确地区限制证据）；
-    ② cf-mitigated: challenge → challenge=True（不得误报 OPENAI_BLOCKED）；
-    ③ 其余（普通 403 等）→ 仅记 result，不设 blocked。
+    仅当无 challenge 证据时，body 命中明确地区限制文本 → blocked=True；
+    其余（普通 403 等）→ 仅记 result，不设 blocked。
     """
-    if _blocked(res.body):
+    if not out.get("challenge") and _blocked(res.body):
         out["blocked"] = True
-    elif _is_challenge(res):
-        out["challenge"] = True
     return out
 
 
@@ -71,7 +73,12 @@ def _probe_home(res):
     out["status"] = res.status
     out["final_url"] = res.final_url or ""
     out["content_type"] = res.content_type or ""
+    out["challenge"] = _is_challenge(res)
     if res.status is not None and 200 <= res.status < 400:
+        if out["challenge"]:
+            # P2：200/3xx 带 challenge 头 → 页面被拦截，不得判 OK
+            out["result"] = "HOME_CHALLENGE"
+            return out
         body = (res.body or "").lower()
         furl = (res.final_url or "").lower()
         host_ok = any(h in furl for h in (
@@ -106,7 +113,11 @@ def _probe_auth(res):
     out["status"] = res.status
     out["final_url"] = res.final_url or ""
     out["content_type"] = res.content_type or ""
+    out["challenge"] = _is_challenge(res)
     if res.status is not None and 200 <= res.status < 400:
+        if out["challenge"]:
+            out["result"] = "AUTH_CHALLENGE"
+            return out
         body = (res.body or "").lstrip()
         ctype = (res.content_type or "").lower()
         out["feature_match"] = (
@@ -138,11 +149,16 @@ def _probe_backend(res):
     out["status"] = res.status
     out["final_url"] = res.final_url or ""
     out["content_type"] = res.content_type or ""
+    out["challenge"] = _is_challenge(res)
     if res.status == 401:
         # P1-01：401 只表示 BACKEND_AUTH_REQUIRED，网络可达证据，不算 BACKEND_OK。
         out["kind"] = "AUTH_REQUIRED"
         out["result"] = "BACKEND_AUTH_REQUIRED"
     elif res.status is not None and 200 <= res.status < 400:
+        if out["challenge"]:
+            out["kind"] = "CHALLENGE"
+            out["result"] = "BACKEND_CHALLENGE"
+            return out
         body = (res.body or "").lstrip()
         ctype = (res.content_type or "").lower()
         out["feature_match"] = "json" in ctype or body.startswith("{")

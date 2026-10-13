@@ -223,6 +223,158 @@ class TestBackend401(unittest.TestCase):
         self.assertEqual(r["status"], ChatgptStatus.NETWORK_PASS)
 
 
+class TestChallengeVsGeoEvidence(unittest.TestCase):
+    """P1：Cloudflare challenge 证据优先于正文文案（Access denied 不判地区封锁）。"""
+
+    def test_three_challenge_with_access_denied_not_blocked(self):
+        """三端点 challenge 403 + "Access denied" 正文 → 不误判 OPENAI_BLOCKED。"""
+        routes = {
+            "home": ProbeResult(403, "https://chat.openai.com/", "text/html",
+                                "Access denied", headers=CH),
+            "auth": ProbeResult(403, "https://chat.openai.com/api/auth/csrf",
+                                "text/html", "Access denied", headers=CH),
+            "backend": ProbeResult(403, "https://chat.openai.com/backend-api/me",
+                                   "text/html", "Access denied", headers=CH),
+        }
+        r = _check(routes)
+        self.assertNotEqual(r["failure_reason"], FailureReason.OPENAI_BLOCKED)
+        for ep in ("home", "auth", "backend"):
+            self.assertTrue(r["detail"][ep]["challenge"])
+            self.assertFalse(r["detail"][ep]["blocked"])
+            self.assertTrue(r["detail"][ep]["result"].endswith("_CHALLENGE"))
+        self.assertEqual(r["status"], ChatgptStatus.NETWORK_PASS)
+        self.assertEqual(r["failure_reason"], FailureReason.STRICT_CHECK_FAIL)
+
+    def test_single_challenge_access_denied_others_ok(self):
+        """单端点 challenge+"Access denied"，另两端正常 → 综合判断（不淘汰）。"""
+        routes = {
+            "home": ProbeResult(403, "https://chat.openai.com/", "text/html",
+                                "Access denied", headers=CH),
+            "auth": AUTH_OK,
+            "backend": BACKEND_OK,
+        }
+        r = _check(routes)
+        self.assertNotEqual(r["failure_reason"], FailureReason.OPENAI_BLOCKED)
+        self.assertTrue(r["detail"]["home"]["challenge"])
+        self.assertFalse(r["detail"]["home"]["blocked"])
+        self.assertEqual(r["status"], ChatgptStatus.NETWORK_PASS)  # HOME 未过
+        self.assertFalse(r["strict_pass"])
+
+    def test_access_denied_alone_not_geo_evidence(self):
+        """普通 403 + "Access denied"（无 challenge 头）→ 不按地区封锁判。"""
+        routes = {
+            "home": ProbeResult(403, "https://chat.openai.com/", "text/html",
+                                "Access denied"),
+            "auth": ProbeResult(403, "https://chat.openai.com/api/auth/csrf",
+                                "text/html", "Access denied"),
+            "backend": ProbeResult(403, "https://chat.openai.com/backend-api/me",
+                                   "text/html", "Access denied"),
+        }
+        r = _check(routes)
+        self.assertNotEqual(r["failure_reason"], FailureReason.OPENAI_BLOCKED)
+        for ep in ("home", "auth", "backend"):
+            self.assertFalse(r["detail"][ep]["blocked"])
+            self.assertFalse(r["detail"][ep]["challenge"])
+            self.assertEqual(r["detail"][ep]["result"], ep.upper() + "_FORBIDDEN")
+
+    def test_geo_text_still_blocked_without_challenge(self):
+        """明确地区限制文本（无 challenge 头）语义保持。"""
+        routes = {
+            "home": ProbeResult(403, "https://chat.openai.com/", "text/html",
+                                GEO_BODY),
+            "auth": ProbeResult(403, "https://chat.openai.com/api/auth/csrf",
+                                "text/html", GEO_BODY),
+            "backend": ProbeResult(403, "https://chat.openai.com/backend-api/me",
+                                   "text/html", GEO_BODY),
+        }
+        r = _check(routes)
+        self.assertEqual(r["failure_reason"], FailureReason.OPENAI_BLOCKED)
+
+
+class TestChallengeUnifiedStatusBranches(unittest.TestCase):
+    """P2：challenge 识别在 200/3xx/4xx 分支统一，不得错误严格通过。"""
+
+    def test_200_with_challenge_header_not_ok(self):
+        """200 + challenge 头（页面特征齐全）→ 不得判 HOME_OK。"""
+        routes = {
+            "home": ProbeResult(
+                200, "https://chat.openai.com/", "text/html",
+                "<html><title>ChatGPT</title><div id=__NEXT_DATA__>auth</div></html>",
+                headers=CH),
+            "auth": AUTH_OK,
+            "backend": BACKEND_OK,
+        }
+        r = _check(routes)
+        self.assertFalse(r["detail"]["home"]["ok"])
+        self.assertTrue(r["detail"]["home"]["challenge"])
+        self.assertEqual(r["detail"]["home"]["result"], "HOME_CHALLENGE")
+        self.assertFalse(r["strict_pass"])  # HOME 未过
+
+    def test_200_auth_with_challenge_not_ok(self):
+        routes = {
+            "home": HOME_OK,
+            "auth": ProbeResult(200, "https://chat.openai.com/api/auth/csrf",
+                                "application/json", '{"csrfToken":"x"}',
+                                headers=CH),
+            "backend": BACKEND_OK,
+        }
+        r = _check(routes)
+        self.assertFalse(r["detail"]["auth"]["ok"])
+        self.assertEqual(r["detail"]["auth"]["result"], "AUTH_CHALLENGE")
+        # STRICT_PASS = HOME_OK AND (AUTH_OK OR BACKEND_OK)：auth 未过但 backend OK
+        self.assertTrue(r["strict_pass"])
+
+    def test_200_backend_with_challenge_not_ok(self):
+        routes = {
+            "home": HOME_OK,
+            "auth": AUTH_OK,
+            "backend": ProbeResult(200, "https://chat.openai.com/backend-api/me",
+                                   "application/json", '{"ok":true}',
+                                   headers=CH),
+        }
+        r = _check(routes)
+        self.assertFalse(r["detail"]["backend"]["ok"])
+        self.assertEqual(r["detail"]["backend"]["result"], "BACKEND_CHALLENGE")
+        self.assertTrue(r["strict_pass"])  # HOME+AUTH OK 仍可严格通过
+
+    def test_3xx_with_challenge_header(self):
+        """3xx + challenge 头 → 不按 2xx 成功条件判定。"""
+        routes = {
+            "home": ProbeResult(302, "https://chat.openai.com/", "text/html",
+                                "<html>redirect</html>", headers=CH),
+            "auth": ProbeResult(302, "https://chat.openai.com/api/auth/csrf",
+                                "text/html", "<html>redirect</html>",
+                                headers=CH),
+            "backend": ProbeResult(302, "https://chat.openai.com/backend-api/me",
+                                   "text/html", "<html>redirect</html>",
+                                   headers=CH),
+        }
+        r = _check(routes)
+        for ep in ("home", "auth", "backend"):
+            self.assertFalse(r["detail"][ep]["ok"])
+            self.assertTrue(r["detail"][ep]["challenge"])
+            self.assertTrue(r["detail"][ep]["result"].endswith("_CHALLENGE"))
+        self.assertFalse(r["strict_pass"])
+
+    def test_backend_401_with_challenge_keeps_auth_required(self):
+        """Backend 401 + challenge 头 → 仍 BACKEND_AUTH_REQUIRED（401 语义优先）。"""
+        routes = {
+            "home": ProbeResult(403, "https://chat.openai.com/", "text/html",
+                                "Forbidden"),
+            "auth": ProbeResult(403, "https://chat.openai.com/api/auth/csrf",
+                                "text/html", "Forbidden"),
+            "backend": ProbeResult(401, "https://chat.openai.com/backend-api/me",
+                                   "application/json", '{"detail":"Unauthorized"}',
+                                   headers=CH),
+        }
+        r = _check(routes)
+        self.assertEqual(r["detail"]["backend"]["result"],
+                         "BACKEND_AUTH_REQUIRED")
+        self.assertEqual(r["detail"]["backend"]["kind"], "AUTH_REQUIRED")
+        self.assertFalse(r["strict_pass"])
+        self.assertFalse(r["detail"]["backend"]["ok"])
+
+
 class TestTransportPreserved(unittest.TestCase):
     """F：传输层失败分类保持。"""
 
