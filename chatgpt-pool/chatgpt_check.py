@@ -79,6 +79,10 @@ def _probe_home(res):
             # P2：200/3xx 带 challenge 头 → 页面被拦截，不得判 OK
             out["result"] = "HOME_CHALLENGE"
             return out
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["result"] = "HOME_BLOCKED"
+            return out
         body = (res.body or "").lower()
         furl = (res.final_url or "").lower()
         host_ok = any(h in furl for h in (
@@ -117,6 +121,10 @@ def _probe_auth(res):
     if res.status is not None and 200 <= res.status < 400:
         if out["challenge"]:
             out["result"] = "AUTH_CHALLENGE"
+            return out
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["result"] = "AUTH_BLOCKED"
             return out
         body = (res.body or "").lstrip()
         ctype = (res.content_type or "").lower()
@@ -159,16 +167,17 @@ def _probe_backend(res):
             out["kind"] = "CHALLENGE"
             out["result"] = "BACKEND_CHALLENGE"
             return out
+        if _blocked(res.body):
+            out["blocked"] = True
+            out["kind"] = "BLOCKED"
+            out["result"] = "BACKEND_BLOCKED"
+            return out
         body = (res.body or "").lstrip()
         ctype = (res.content_type or "").lower()
         out["feature_match"] = "json" in ctype or body.startswith("{")
         out["ok"] = out["feature_match"]
         out["kind"] = "OK" if out["ok"] else "FAIL"
         out["result"] = "BACKEND_OK" if out["ok"] else "BACKEND_FAIL"
-        if _blocked(res.body):
-            out["blocked"] = True
-            out["kind"] = "BLOCKED"
-            out["result"] = "BACKEND_BLOCKED"
     elif res.status is not None and res.status >= 400:
         _classify_http_fail(out, res)
         if out["blocked"]:

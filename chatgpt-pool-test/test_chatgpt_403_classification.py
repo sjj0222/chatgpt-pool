@@ -450,5 +450,58 @@ class TestStabilityIntegration(unittest.TestCase):
         self.assertFalse(ok)  # 1/3 → 不通过
 
 
+
+class TestGeoEvidenceOverridesSuccessFeatures(unittest.TestCase):
+    """地区限制证据必须否决成功特征，不能同时 ok=True / blocked=True。"""
+
+    def test_home_200_success_features_and_geo_text(self):
+        routes = {
+            "home": ProbeResult(
+                200, "https://chat.openai.com/", "text/html",
+                "<html><title>ChatGPT</title><div id=__NEXT_DATA__>auth</div> "
+                + GEO_BODY),
+            "auth": AUTH_OK,
+            "backend": BACKEND_OK,
+        }
+        r = _check(routes)
+        self.assertTrue(r["detail"]["home"]["blocked"])
+        self.assertFalse(r["detail"]["home"]["ok"])
+        self.assertEqual(r["detail"]["home"]["result"], "HOME_BLOCKED")
+        self.assertFalse(r["strict_pass"])
+
+    def test_auth_200_csrf_and_geo_text(self):
+        routes = {
+            "home": HOME_OK,
+            "auth": ProbeResult(
+                200, "https://chat.openai.com/api/auth/csrf",
+                "application/json",
+                '{"csrfToken":"mock-csrf","detail":"' + GEO_BODY + '"}'),
+            "backend": ProbeResult(
+                403, "https://chat.openai.com/backend-api/me",
+                "application/json", "Forbidden"),
+        }
+        r = _check(routes)
+        self.assertTrue(r["detail"]["auth"]["blocked"])
+        self.assertFalse(r["detail"]["auth"]["ok"])
+        self.assertEqual(r["detail"]["auth"]["result"], "AUTH_BLOCKED")
+        self.assertFalse(r["strict_pass"])
+
+    def test_backend_200_json_and_geo_text(self):
+        routes = {
+            "home": HOME_OK,
+            "auth": ProbeResult(
+                403, "https://chat.openai.com/api/auth/csrf",
+                "text/html", "Forbidden"),
+            "backend": ProbeResult(
+                200, "https://chat.openai.com/backend-api/me",
+                "application/json",
+                '{"ok":true,"detail":"' + GEO_BODY + '"}'),
+        }
+        r = _check(routes)
+        self.assertTrue(r["detail"]["backend"]["blocked"])
+        self.assertFalse(r["detail"]["backend"]["ok"])
+        self.assertEqual(r["detail"]["backend"]["result"], "BACKEND_BLOCKED")
+        self.assertFalse(r["strict_pass"])
+
 if __name__ == "__main__":
     unittest.main()
